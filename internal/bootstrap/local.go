@@ -184,7 +184,7 @@ func setupTemporal(installDir string, cfg *Config, printer Printer) error {
 
 	// Wait for Temporal to be ready (up to 60s)
 	printer.Info("Waiting for Temporal to be ready (first run may take up to 5 minutes for schema setup)...")
-	if err := waitForHTTP(fmt.Sprintf("http://localhost:%s/api/v1/namespaces", cfg.TemporalPort), 300*time.Second); err != nil {
+	if err := waitForHTTP(fmt.Sprintf("http://localhost:%s/api/v1/namespaces", cfg.TemporalUIPort), 300*time.Second); err != nil {
 		// Check container status for debugging
 		statusCmd := exec.Command("docker", "compose", "ps", "--format", "{{.Name}}\t{{.Status}}")
 		statusCmd.Dir = temporalDir
