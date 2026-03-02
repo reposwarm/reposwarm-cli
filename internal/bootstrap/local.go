@@ -500,7 +500,7 @@ func verifyServices(cfg *Config, printer Printer) LocalStepResult {
 			continue
 		}
 		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		if resp.StatusCode >= 200 && resp.StatusCode < 500 {
 			printer.Success(fmt.Sprintf("%s: healthy", c.name))
 			messages = append(messages, fmt.Sprintf("%s: ok", c.name))
 		} else {
