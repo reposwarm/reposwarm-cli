@@ -2,11 +2,14 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"sort"
+	"sync/atomic"
 	"strings"
 	"time"
 
 	"github.com/loki-bedlam/reposwarm-cli/internal/api"
+	"github.com/loki-bedlam/reposwarm-cli/internal/config"
 	"github.com/loki-bedlam/reposwarm-cli/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -73,6 +76,10 @@ func showRepoProgress(repoName string, wait bool) error {
 		return err
 	}
 
+	// Get configured model
+	cliCfg, _ := config.Load()
+	model := cliCfg.EffectiveModel()
+
 	// Find the workflow for this repo
 	workflowID, err := findRepoWorkflow(client, repoName)
 	if err != nil {
@@ -90,11 +97,11 @@ func showRepoProgress(repoName string, wait bool) error {
 	}
 
 	if !wait {
-		return showRepoSnapshot(client, repoName, workflowID)
+		return showRepoSnapshot(client, repoName, workflowID, model)
 	}
 
 	// --wait mode: poll until done
-	return watchRepoUntilDone(client, repoName, workflowID)
+	return watchRepoUntilDone(client, repoName, workflowID, model)
 }
 
 func findRepoWorkflow(client *api.Client, repoName string) (string, error) {
@@ -142,7 +149,7 @@ func getWorkflowStatus(client *api.Client, workflowID string) (string, string, e
 	return wf.Status, wf.StartTime, nil
 }
 
-func showRepoSnapshot(client *api.Client, repoName, workflowID string) error {
+func showRepoSnapshot(client *api.Client, repoName, workflowID, model string) error {
 	status, startTime, err := getWorkflowStatus(client, workflowID)
 	if err != nil {
 		return err
@@ -189,22 +196,62 @@ func showRepoSnapshot(client *api.Client, repoName, workflowID string) error {
 			"completed":  done,
 			"total":      total,
 			"current":    currentStep,
+			"model":      model,
 			"steps":      steps,
 		})
 	}
 
-	renderProgressDisplay(repoName, workflowID, status, startTime, completed, done, total, currentStep)
-	return nil
-}
-
-func watchRepoUntilDone(client *api.Client, repoName, workflowID string) error {
-	if flagJSON {
-		return watchRepoJSON(client, repoName, workflowID)
+	if flagAgent {
+		renderProgressDisplay(repoName, workflowID, status, startTime, completed, done, total, currentStep, model)
+		return nil
 	}
-	return watchRepoHuman(client, repoName, workflowID)
+
+	// Human mode: live view with 'q' to quit
+	oldState, rawErr := makeRaw(stdinFd())
+	if rawErr == nil {
+		defer restoreTerminal(stdinFd(), oldState)
+	}
+
+	var quit atomic.Bool
+	if rawErr == nil {
+		go func() {
+			buf := make([]byte, 1)
+			for {
+				n, err := os.Stdin.Read(buf)
+				if err != nil || n == 0 {
+					continue
+				}
+				if buf[0] == 'q' || buf[0] == 'Q' || buf[0] == 3 {
+					quit.Store(true)
+					return
+				}
+			}
+		}()
+	}
+
+	clearScreen()
+	renderProgressDisplay(repoName, workflowID, status, startTime, completed, done, total, currentStep, model)
+	fmt.Printf("\n  %s\n", output.Dim("Press q to quit"))
+
+	// Wait for 'q'
+	for {
+		if quit.Load() {
+			clearScreen()
+			fmt.Print("\n  👋 Closed.\n\n")
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
-func watchRepoJSON(client *api.Client, repoName, workflowID string) error {
+func watchRepoUntilDone(client *api.Client, repoName, workflowID, model string) error {
+	if flagJSON {
+		return watchRepoJSON(client, repoName, workflowID, model)
+	}
+	return watchRepoHuman(client, repoName, workflowID, model)
+}
+
+func watchRepoJSON(client *api.Client, repoName, workflowID, model string) error {
 	seen := map[string]bool{}
 	for {
 		status, _, err := getWorkflowStatus(client, workflowID)
@@ -230,6 +277,7 @@ func watchRepoJSON(client *api.Client, repoName, workflowID string) error {
 		if status != "Running" {
 			output.JSON(map[string]any{
 				"event":     "workflow_done",
+					"model":      model,
 				"repo":      repoName,
 				"status":    status,
 				"completed": len(seen),
@@ -241,11 +289,39 @@ func watchRepoJSON(client *api.Client, repoName, workflowID string) error {
 	}
 }
 
-func watchRepoHuman(client *api.Client, repoName, workflowID string) error {
+func watchRepoHuman(client *api.Client, repoName, workflowID, model string) error {
 	total := len(investigationSteps)
 	lastDone := -1
 
+	// Set up 'q' to quit
+	oldState, rawErr := makeRaw(stdinFd())
+	if rawErr == nil {
+		defer restoreTerminal(stdinFd(), oldState)
+	}
+
+	var quit atomic.Bool
+	if rawErr == nil {
+		go func() {
+			buf := make([]byte, 1)
+			for {
+				n, err := os.Stdin.Read(buf)
+				if err != nil || n == 0 {
+					continue
+				}
+				if buf[0] == 'q' || buf[0] == 'Q' || buf[0] == 3 {
+					quit.Store(true)
+					return
+				}
+			}
+		}()
+	}
+
 	for {
+		if quit.Load() {
+			clearScreen()
+			fmt.Print("\n  👋 Closed.\n\n")
+			return nil
+		}
 		status, startTime, err := getWorkflowStatus(client, workflowID)
 		if err != nil {
 			return err
@@ -270,7 +346,8 @@ func watchRepoHuman(client *api.Client, repoName, workflowID string) error {
 		if done != lastDone || status != "Running" {
 			// Clear screen and redraw
 			fmt.Print("\033[H\033[2J")
-			renderProgressDisplay(repoName, workflowID, status, startTime, completed, done, total, currentStep)
+			renderProgressDisplay(repoName, workflowID, status, startTime, completed, done, total, currentStep, model)
+			fmt.Printf("\n  %s\n", output.Dim("Press q to quit · refreshes every 3s"))
 			lastDone = done
 		}
 
@@ -290,7 +367,7 @@ func watchRepoHuman(client *api.Client, repoName, workflowID string) error {
 	}
 }
 
-func renderProgressDisplay(repoName, workflowID, status, startTime string, completed map[string]bool, done, total int, currentStep string) {
+func renderProgressDisplay(repoName, workflowID, status, startTime string, completed map[string]bool, done, total int, currentStep, model string) {
 	fmt.Println()
 	fmt.Printf("  %s\n\n", output.Bold(fmt.Sprintf("🔍 Investigating: %s", repoName)))
 
@@ -299,6 +376,9 @@ func renderProgressDisplay(repoName, workflowID, status, startTime string, compl
 	fmt.Printf("  %-14s %s\n", output.Dim("Status:"), output.StatusColor(status))
 	if startTime != "" {
 		fmt.Printf("  %-14s %s\n", output.Dim("Elapsed:"), elapsed(startTime))
+	}
+	if model != "" {
+		fmt.Printf("  %-14s %s\n", output.Dim("Model:"), model)
 	}
 	fmt.Println()
 
