@@ -171,7 +171,7 @@ func newPromptsShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show prompt details and template",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts show <name>\n\nExample:\n  reposwarm prompts show hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -216,7 +216,7 @@ func newPromptsCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a new prompt",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts create <name> --template-file <file>\n\nExample:\n  reposwarm prompts create my_prompt --template-file prompt.md"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -267,7 +267,7 @@ func newPromptsUpdateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update a prompt",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts update <name> [--template-file <file>]\n\nExample:\n  reposwarm prompts update hl_overview --template-file new.md"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -316,7 +316,7 @@ func newPromptsDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Delete a prompt",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts delete <name>\n\nExample:\n  reposwarm prompts delete hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
 				fmt.Printf("  Delete prompt %s? [y/N] ", output.Bold(args[0]))
@@ -350,7 +350,7 @@ func newPromptsToggleCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "toggle <name>",
 		Short: "Toggle enabled/disabled",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts toggle <name>\n\nExample:\n  reposwarm prompts toggle hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -377,7 +377,7 @@ func newPromptsOrderCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "order <name> <position>",
 		Short: "Set execution order",
-		Args:  cobra.ExactArgs(2),
+		Args:  friendlyExactArgs(2, "reposwarm prompts order <name> <position>\n\nExample:\n  reposwarm prompts order hl_overview 1"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var order int
 			if _, err := fmt.Sscanf(args[1], "%d", &order); err != nil {
@@ -405,7 +405,7 @@ func newPromptsContextCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "context <name> <text>",
 		Short: "Set prompt context/instructions",
-		Args:  cobra.ExactArgs(2),
+		Args:  friendlyExactArgs(2, "reposwarm prompts context <name> <text>\n\nExample:\n  reposwarm prompts context hl_overview \"Focus on architecture\""),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -429,7 +429,7 @@ func newPromptsVersionsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "versions <name>",
 		Short: "List version history",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts versions <name>\n\nExample:\n  reposwarm prompts versions hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -460,7 +460,7 @@ func newPromptsRollbackCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rollback <name> <version>",
 		Short: "Rollback to a specific version",
-		Args:  cobra.ExactArgs(2),
+		Args:  friendlyExactArgs(2, "reposwarm prompts rollback <name> <version>\n\nExample:\n  reposwarm prompts rollback hl_overview 2"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var ver int
 			if _, err := fmt.Sscanf(args[1], "%d", &ver); err != nil {
@@ -546,7 +546,7 @@ func newPromptsImportCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "import <file>",
 		Short: "Import prompts from JSON file",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm prompts import <file>\n\nExample:\n  reposwarm prompts import prompts.json"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := os.ReadFile(args[0])
 			if err != nil {

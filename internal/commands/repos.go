@@ -97,7 +97,7 @@ func newReposAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add a repository to track",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm repos add <name> --url <url>\n\nExample:\n  reposwarm repos add my-repo --url https://github.com/org/repo"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -134,7 +134,7 @@ func newReposRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a tracked repository",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm repos remove <name>\n\nExample:\n  reposwarm repos remove my-repo"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
 				fmt.Printf("  Remove %s? [y/N] ", args[0])
@@ -172,7 +172,7 @@ func newReposEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable <name>",
 		Short: "Enable a repository for investigation",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm repos enable <name>\n\nExample:\n  reposwarm repos enable my-repo"),
 		RunE:  repoToggle(true),
 	}
 }
@@ -181,7 +181,7 @@ func newReposDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable <name>",
 		Short: "Disable a repository from investigation",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm repos disable <name>\n\nExample:\n  reposwarm repos disable my-repo"),
 		RunE:  repoToggle(false),
 	}
 }
@@ -215,7 +215,7 @@ func newReposShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show detailed info for a single repository",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm repos show <name>\n\nExample:\n  reposwarm repos show my-repo"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {

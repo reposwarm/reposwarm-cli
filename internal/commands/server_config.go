@@ -45,7 +45,7 @@ func newConfigServerSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "server-set <key> <value>",
 		Short: "Update a server configuration value",
-		Args:  cobra.ExactArgs(2),
+		Args:  friendlyExactArgs(2, "reposwarm config server-set <key> <value>\n\nExample:\n  reposwarm config server-set defaultModel claude-opus-4-6"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {

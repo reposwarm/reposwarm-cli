@@ -75,7 +75,7 @@ func newWorkflowsStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <workflow-id>",
 		Short: "Show detailed workflow status",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm workflows status <workflow-id>\n\nExample:\n  reposwarm workflows status wf-12345"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -114,7 +114,7 @@ func newWorkflowsTerminateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "terminate <workflow-id>",
 		Short: "Terminate a running workflow",
-		Args:  cobra.ExactArgs(1),
+		Args:  friendlyExactArgs(1, "reposwarm workflows terminate <workflow-id>\n\nExample:\n  reposwarm workflows terminate wf-12345"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
 				fmt.Printf("  Terminate workflow %s? [y/N] ", args[0])

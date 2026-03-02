@@ -70,7 +70,7 @@ func newResultsSectionsCmd() *cobra.Command {
 		Use:     "sections <repo>",
 		Aliases: []string{"show"},
 		Short:   "List investigation sections for a repo",
-		Args:    cobra.ExactArgs(1),
+		Args:    friendlyExactArgs(1, "reposwarm results sections <repo>\n\nExample:\n  reposwarm results sections my-repo"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -118,7 +118,7 @@ Examples:
   reposwarm results read is-odd                  # All sections
   reposwarm results read is-odd hl_overview      # Single section
   reposwarm results read is-odd --raw > out.md   # Raw markdown`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: friendlyRangeArgs(1, 2, "reposwarm results read <repo> [section]\n\nExamples:\n  reposwarm results read my-repo\n  reposwarm results read my-repo hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -201,7 +201,7 @@ func newResultsMetaCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "meta <repo> [section]",
 		Short: "Show metadata for investigation results (no content)",
-		Args:  cobra.RangeArgs(1, 2),
+		Args:  friendlyRangeArgs(1, 2, "reposwarm results meta <repo> [section]\n\nExamples:\n  reposwarm results meta my-repo\n  reposwarm results meta my-repo hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -290,7 +290,7 @@ Single repo:
 
 All repos:
   reposwarm results export --all -d ./arch-docs      # exports all repos to directory`,
-		Args: cobra.MaximumNArgs(1),
+		Args: friendlyMaxArgs(1, "reposwarm results export [repo] [--all]\n\nExamples:\n  reposwarm results export my-repo\n  reposwarm results export --all -d ./docs"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {

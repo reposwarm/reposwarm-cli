@@ -112,7 +112,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a configuration value",
-		Args:  cobra.ExactArgs(2),
+		Args:  friendlyExactArgs(2, "reposwarm config set <key> <value>\n\nExample:\n  reposwarm config set apiUrl http://localhost:3000"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
 			if err != nil {

@@ -20,7 +20,7 @@ Shows sections present in one but not the other, and line count differences.
 Examples:
   reposwarm results diff is-odd meshmart-catalog
   reposwarm results diff is-odd meshmart-catalog hl_overview`,
-		Args: cobra.RangeArgs(2, 3),
+		Args: friendlyRangeArgs(2, 3, "reposwarm results diff <repo1> <repo2> [section]\n\nExamples:\n  reposwarm results diff is-odd meshmart-catalog\n  reposwarm results diff is-odd meshmart-catalog hl_overview"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {

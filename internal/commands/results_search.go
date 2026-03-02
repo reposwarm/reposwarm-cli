@@ -26,7 +26,7 @@ Examples:
   reposwarm results search "Cognito" --repo my-app
   reposwarm results search "DynamoDB" --section DBs
   reposwarm results search "security" --max 20`,
-		Args: cobra.ExactArgs(1),
+		Args: friendlyExactArgs(1, "reposwarm results search <query>\n\nExample:\n  reposwarm results search \"DynamoDB\" --repo my-app"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {

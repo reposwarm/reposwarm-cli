@@ -21,7 +21,7 @@ Valid targets:
   ui        — RepoSwarm UI
   api       — API health endpoint
   hub       — GitHub repository for the project`,
-		Args: cobra.ExactArgs(1),
+		Args: friendlyExactArgs(1, "reposwarm show <target>\n\nTargets: temporal, ui, api, hub\n\nExample:\n  reposwarm show temporal"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
 

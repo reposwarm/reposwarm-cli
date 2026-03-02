@@ -130,7 +130,14 @@ func ctx() context.Context {
 func Execute(version string) {
 	root := NewRootCmd(version)
 	if err := root.Execute(); err != nil {
-		output.F.Error(err.Error())
+		msg := err.Error()
+		// Friendly arg errors (from friendlyExactArgs etc.) start with 💡
+		// Print them directly to stderr without an extra ERROR prefix
+		if len(msg) > 0 && msg[0] == 0xF0 { // UTF-8 start of emoji
+			fmt.Fprintln(os.Stderr, msg)
+		} else {
+			output.F.Error(msg)
+		}
 		os.Exit(1)
 	}
 }

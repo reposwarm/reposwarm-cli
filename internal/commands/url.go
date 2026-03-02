@@ -21,7 +21,7 @@ Valid services:
   api            — RepoSwarm API
   hub            — GitHub repository
   all            — Print all URLs with labels`,
-		Args: cobra.ExactArgs(1),
+		Args: friendlyExactArgs(1, "reposwarm url <service>\n\nServices: temporal, ui, api, hub, all\n\nExample:\n  reposwarm url temporal"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
 
