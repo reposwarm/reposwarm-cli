@@ -496,7 +496,7 @@ func TemporalComposeLocal() string {
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=postgres
-      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
       - SKIP_DEFAULT_NAMESPACE_CREATION=false
     depends_on:
       postgres:
