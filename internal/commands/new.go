@@ -2,6 +2,8 @@ package commands
 
 import (
 	"bufio"
+	"net/http"
+	"time"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ func newNewCmd() *cobra.Command {
 	var dir string
 	var agentMode bool
 	var guideOnly bool
+	var forceMode bool
 	var localMode bool
 
 	cmd := &cobra.Command{
@@ -48,6 +51,10 @@ Examples:
 
 			// --local mode: automated setup
 			if localMode {
+				// Check if there's already a local install
+				if existing := detectExistingInstall(dir, flagJSON, flagAgent, forceMode); existing {
+					return nil
+				}
 				cliCfg, _ := config.Load()
 				bsCfg := &bootstrap.Config{
 					WorkerRepoURL:  cliCfg.EffectiveWorkerRepoURL(),
@@ -171,6 +178,7 @@ Examples:
 
 	cmd.Flags().StringVar(&dir, "dir", "", "Installation directory (default: ./reposwarm)")
 	cmd.Flags().BoolVar(&agentMode, "agent", false, "Auto-launch coding agent for installation")
+	cmd.Flags().BoolVar(&forceMode, "force", false, "Destroy existing install without prompting")
 	cmd.Flags().BoolVar(&guideOnly, "guide-only", false, "Only generate guide files, don't prompt")
 	cmd.Flags().BoolVar(&localMode, "local", false, "Automated local setup: start Temporal, API, Worker, and UI")
 	return cmd
@@ -300,4 +308,119 @@ func cfgToBootstrap(cliCfg *config.Config, env *bootstrap.Environment) *bootstra
 		cfg.Region = env.AWSRegion
 	}
 	return cfg
+}
+
+// detectExistingInstall checks for an existing local installation and prompts
+// the user on what to do. Returns true if we should abort (user chose to keep existing).
+func detectExistingInstall(dir string, jsonMode, agentMode, forceMode bool) bool {
+	// Check if the install directory exists with content
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return false // No existing install
+	}
+
+	// Check if services are actually running
+	temporalUp := isServiceUp("http://localhost:8233/api/v1/namespaces")
+	apiUp := isServiceUp("http://localhost:3000/v1/health")
+
+	if !temporalUp && !apiUp {
+		// Directory exists but nothing is running — might be leftover from a failed install
+		// Continue without prompting (setupLocal handles existing dirs gracefully)
+		return false
+	}
+
+	// Services are running!
+	if forceMode {
+		if !jsonMode && !agentMode {
+			output.F.Info("Existing installation found — destroying (--force)")
+		}
+		teardownExisting(dir)
+		return false // Continue with fresh install
+	}
+
+	if jsonMode {
+		output.JSON(map[string]any{
+			"error":      "existing_install",
+			"message":    "A local RepoSwarm installation is already running",
+			"installDir": dir,
+			"temporal":   temporalUp,
+			"api":        apiUp,
+		})
+		return true
+	}
+
+	if agentMode {
+		fmt.Fprintf(os.Stderr, "A local RepoSwarm installation is already running at %s\n", dir)
+		fmt.Fprintln(os.Stderr, "Use --force to destroy and reinstall, or manage with: reposwarm status")
+		return true
+	}
+
+	// Interactive prompt
+	output.F.Section("Existing Installation Detected")
+	output.F.Success("RepoSwarm is already running!")
+	if temporalUp {
+		output.F.Info("  Temporal: ✓ running")
+	}
+	if apiUp {
+		output.F.Info("  API:      ✓ running")
+	}
+	fmt.Println()
+	fmt.Println("  What would you like to do?")
+	fmt.Println()
+	fmt.Printf("  %s  Destroy existing install and start fresh\n", output.Bold("[d]"))
+	fmt.Printf("  %s  Keep existing install (do nothing)\n", output.Bold("[k]"))
+	fmt.Println()
+	fmt.Print("  Your choice (d/k): ")
+
+	var choice string
+	fmt.Scanln(&choice)
+
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "d", "destroy":
+		output.F.Info("Tearing down existing installation...")
+		teardownExisting(dir)
+		return false // Continue with fresh install
+	default:
+		output.F.Success("Keeping existing installation. Use 'reposwarm status' to check health.")
+		return true // Abort
+	}
+}
+
+func isServiceUp(url string) bool {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
+func teardownExisting(dir string) {
+	// Stop docker compose
+	temporalDir := filepath.Join(dir, "temporal")
+	if _, err := os.Stat(filepath.Join(temporalDir, "docker-compose.yml")); err == nil {
+		cmd := exec.Command("docker", "compose", "down", "-v")
+		cmd.Dir = temporalDir
+		cmd.Run()
+		output.F.Info("  Temporal containers stopped")
+	}
+
+	// Kill processes from PID files
+	for _, sub := range []string{"api", "worker", "ui"} {
+		pidFile := filepath.Join(dir, sub, sub+".pid")
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			continue
+		}
+		pid := strings.TrimSpace(string(data))
+		killCmd := exec.Command("kill", pid)
+		if killCmd.Run() == nil {
+			output.F.Info(fmt.Sprintf("  %s process stopped (PID %s)", sub, pid))
+		}
+	}
+
+	// Remove the directory
+	os.RemoveAll(dir)
+	output.F.Info("  Install directory removed")
 }
