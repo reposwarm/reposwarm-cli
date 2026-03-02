@@ -71,6 +71,8 @@ Examples:
 				if bsCfg.Region == "" {
 					bsCfg.Region = env.AWSRegion
 				}
+
+				// JSON / agent modes — skip plan, go straight to setup
 				if flagJSON {
 					printer := &jsonPrinter{}
 					result, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
@@ -79,7 +81,24 @@ Examples:
 					}
 					return output.JSON(result)
 				}
-				printer := &fmtPrinter{}
+				if flagAgent {
+					printer := &fmtPrinter{}
+					_, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
+					return err
+				}
+
+				// ── Human interactive mode ──
+				// Show the plan and ask for confirmation
+				plan := bootstrap.PlanFromConfig(bsCfg, dir)
+				if !showPlanAndConfirm(plan, env, forceMode) {
+					fmt.Println()
+					output.F.Info("No worries! Run again whenever you're ready. 👋")
+					fmt.Println()
+					return nil
+				}
+
+				// Run setup with spinners
+				printer := &spinnerPrinter{}
 				_, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
 				return err
 			}
@@ -423,4 +442,115 @@ func teardownExisting(dir string) {
 	// Remove the directory
 	os.RemoveAll(dir)
 	output.F.Info("  Install directory removed")
+}
+
+// showPlanAndConfirm displays the full setup plan and asks for confirmation.
+// Returns true if user wants to proceed.
+func showPlanAndConfirm(plan *bootstrap.Plan, env *bootstrap.Environment, force bool) bool {
+	fmt.Println()
+	fmt.Printf("  %s\n", output.Bold("🚀 RepoSwarm Local Setup"))
+	fmt.Println()
+	fmt.Printf("  %s\n", output.Dim("Here's what we're going to set up on your machine:"))
+	fmt.Println()
+
+	// Steps
+	fmt.Printf("  %s\n", output.Bold("📋 The Plan"))
+	fmt.Println()
+	steps := plan.Steps()
+	for i, step := range steps {
+		fmt.Printf("     %s  %s\n", output.Cyan(fmt.Sprintf("%d.", i+1)), step)
+	}
+	fmt.Println()
+
+	// Ports
+	fmt.Printf("  %s\n", output.Bold("🔌 Ports"))
+	fmt.Println()
+	for _, p := range plan.Ports() {
+		fmt.Printf("     %-20s → localhost:%s\n", output.Dim(p[0]), output.Cyan(p[1]))
+	}
+	fmt.Println()
+
+	// What it needs
+	fmt.Printf("  %s\n", output.Bold("📦 What's included"))
+	fmt.Println()
+	fmt.Printf("     • 3 Docker containers  %s\n", output.Dim("(Temporal + PostgreSQL + DynamoDB Local)"))
+	fmt.Printf("     • API server           %s\n", output.Dim("(Node.js)"))
+	fmt.Printf("     • Python worker        %s\n", output.Dim("(handles investigations)"))
+	fmt.Printf("     • Web UI               %s\n", output.Dim("(Next.js dev server)"))
+	fmt.Println()
+
+	// Timing note
+	fmt.Printf("  %s %s\n", output.Yellow("⏱"), output.Dim("First run takes 5-8 minutes (Docker pulls + Temporal schema setup)."))
+	fmt.Printf("    %s\n", output.Dim("Subsequent runs are much faster."))
+	fmt.Println()
+
+	if force {
+		return true
+	}
+
+	// Confirm
+	fmt.Printf("  %s ", output.Bold("Ready to go? [Y/n]"))
+	var choice string
+	fmt.Scanln(&choice)
+	choice = strings.ToLower(strings.TrimSpace(choice))
+	return choice == "" || choice == "y" || choice == "yes"
+}
+
+// spinnerPrinter implements bootstrap.Printer with animated spinners.
+type spinnerPrinter struct {
+	current *output.Spinner
+}
+
+func (p *spinnerPrinter) Section(title string) {
+	// Stop any running spinner
+	if p.current != nil {
+		p.current.Stop()
+		p.current = nil
+	}
+	fmt.Println()
+	fmt.Printf("  %s\n", output.Bold(title))
+	fmt.Println()
+}
+
+func (p *spinnerPrinter) Info(msg string) {
+	// Start a new spinner for this step
+	if p.current != nil {
+		p.current.Stop()
+	}
+	p.current = output.NewSpinner(msg)
+}
+
+func (p *spinnerPrinter) Success(msg string) {
+	if p.current != nil {
+		p.current.StopSuccess(msg)
+		p.current = nil
+	} else {
+		fmt.Printf("  %s %s\n", output.Green("✓"), msg)
+	}
+}
+
+func (p *spinnerPrinter) Warning(msg string) {
+	if p.current != nil {
+		p.current.StopWarning(msg)
+		p.current = nil
+	} else {
+		fmt.Printf("  %s %s\n", output.Yellow("⚠"), msg)
+	}
+}
+
+func (p *spinnerPrinter) Error(msg string) {
+	if p.current != nil {
+		p.current.StopError(msg)
+		p.current = nil
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %s\n", output.Red("✗"), msg)
+	}
+}
+
+func (p *spinnerPrinter) Printf(format string, args ...any) {
+	if p.current != nil {
+		p.current.Stop()
+		p.current = nil
+	}
+	fmt.Printf(format, args...)
 }
