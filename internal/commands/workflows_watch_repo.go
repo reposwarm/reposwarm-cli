@@ -375,7 +375,22 @@ func renderProgressDisplay(repoName, workflowID, status, startTime string, compl
 	fmt.Printf("  %-14s %s\n", output.Dim("Workflow:"), output.Dim(workflowID))
 	fmt.Printf("  %-14s %s\n", output.Dim("Status:"), output.StatusColor(status))
 	if startTime != "" {
-		fmt.Printf("  %-14s %s\n", output.Dim("Elapsed:"), elapsed(startTime))
+		elapsedStr := elapsed(startTime)
+		// Staleness warning if running with zero progress for >30min
+		if done == 0 && status == "RUNNING" {
+			if mins := elapsedMinutes(startTime); mins > 30 {
+				elapsedStr += "  " + output.Yellow(fmt.Sprintf("⚠ no progress in %dm — run: reposwarm errors", mins))
+			}
+		} else if done > 0 && done < total && status == "RUNNING" {
+			// Warn if stuck on same step for >20min (rough heuristic based on total time vs progress)
+			if mins := elapsedMinutes(startTime); mins > 0 {
+				avgPerStep := mins / done
+				if avgPerStep > 20 {
+					elapsedStr += "  " + output.Yellow("⚠ slower than expected")
+				}
+			}
+		}
+		fmt.Printf("  %-14s %s\n", output.Dim("Elapsed:"), elapsedStr)
 	}
 	if model != "" {
 		fmt.Printf("  %-14s %s\n", output.Dim("Model:"), model)
@@ -589,6 +604,17 @@ func repoNames(wfs []api.WorkflowExecution) []string {
 		names[i] = repoName(w.WorkflowID)
 	}
 	return names
+}
+
+func elapsedMinutes(startTime string) int {
+	t, err := time.Parse(time.RFC3339Nano, startTime)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05Z", startTime)
+		if err != nil {
+			return 0
+		}
+	}
+	return int(time.Since(t).Minutes())
 }
 
 func elapsed(startTime string) string {
