@@ -16,6 +16,7 @@ import (
 
 func newDashboardCmd() *cobra.Command {
 	var interval int
+	var focusRepo string
 
 	cmd := &cobra.Command{
 		Use:   "dashboard",
@@ -26,6 +27,7 @@ Sorted by progress (most complete first). Press 'q' to quit.
 
 Examples:
   reposwarm dashboard
+  reposwarm dashboard --repo is-odd
   reposwarm dash
   reposwarm top`,
 		Args: friendlyMaxArgs(0, `reposwarm dashboard
@@ -35,11 +37,12 @@ No arguments needed — just run it!`),
 			if flagJSON {
 				return dashboardJSON()
 			}
-			return dashboardHuman(interval)
+			return dashboardHuman(interval, focusRepo)
 		},
 	}
 
 	cmd.Flags().IntVar(&interval, "interval", 3, "Refresh interval in seconds")
+	cmd.Flags().StringVar(&focusRepo, "repo", "", "Focus on a specific repo (show step detail + errors)")
 	return cmd
 }
 
@@ -54,7 +57,7 @@ type dashRow struct {
 	WorkflowID string
 }
 
-func dashboardHuman(interval int) error {
+func dashboardHuman(interval int, focusRepo string) error {
 	client, err := getClient()
 	if err != nil {
 		return err
@@ -64,7 +67,7 @@ func dashboardHuman(interval int) error {
 	oldState, err := makeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		// Fall back to non-raw mode (Ctrl+C still works)
-		return dashboardLoop(client, interval, nil)
+		return dashboardLoop(client, interval, focusRepo, nil)
 	}
 	defer restoreTerminal(int(os.Stdin.Fd()), oldState)
 
@@ -84,15 +87,15 @@ func dashboardHuman(interval int) error {
 		}
 	}()
 
-	return dashboardLoop(client, interval, &quit)
+	return dashboardLoop(client, interval, focusRepo, &quit)
 }
 
-func dashboardLoop(client *api.Client, interval int, quit *atomic.Bool) error {
+func dashboardLoop(client *api.Client, interval int, focusRepo string, quit *atomic.Bool) error {
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
 	// Initial render
-	if err := renderDashboard(client); err != nil {
+	if err := renderDashboard(client, focusRepo); err != nil {
 		return err
 	}
 
@@ -105,7 +108,7 @@ func dashboardLoop(client *api.Client, interval int, quit *atomic.Bool) error {
 
 		select {
 		case <-ticker.C:
-			if err := renderDashboard(client); err != nil {
+			if err := renderDashboard(client, focusRepo); err != nil {
 				// Render error but keep going
 				fmt.Fprintf(os.Stderr, "\r  ⚠ refresh failed: %s", err)
 			}
@@ -115,7 +118,7 @@ func dashboardLoop(client *api.Client, interval int, quit *atomic.Bool) error {
 	}
 }
 
-func renderDashboard(client *api.Client) error {
+func renderDashboard(client *api.Client, focusRepo string) error {
 	// Fetch workflows
 	var result api.WorkflowsResponse
 	if err := client.Get(ctx(), "/workflows?pageSize=100", &result); err != nil {
@@ -270,6 +273,11 @@ func renderDashboard(client *api.Client) error {
 		}
 	}
 
+	// If a repo is focused, show step detail + errors below the grid
+	if focusRepo != "" {
+		renderFocusedRepo(client, focusRepo, rows)
+	}
+
 	fmt.Println()
 	fmt.Printf("  %s\n", output.Dim("Press q to quit · refreshes every 3s"))
 	fmt.Println()
@@ -361,4 +369,61 @@ func makeRaw(fd int) (*unix.Termios, error) {
 
 func restoreTerminal(fd int, state *unix.Termios) {
 	unix.IoctlSetTermios(fd, unix.TCSETS, state)
+}
+
+// renderFocusedRepo shows step checklist + errors for a specific repo below the grid.
+func renderFocusedRepo(client *api.Client, focusRepo string, rows []dashRow) {
+	// Find the focused row
+	var focused *dashRow
+	for i, r := range rows {
+		if r.Repo == focusRepo {
+			focused = &rows[i]
+			break
+		}
+	}
+
+	if focused == nil {
+		fmt.Println()
+		fmt.Printf("  %s No investigation found for '%s'\n", output.Yellow("⚠"), focusRepo)
+		return
+	}
+
+	// Get completed steps
+	completed, _ := getCompletedSteps(client, focusRepo)
+
+	// Step checklist
+	fmt.Println()
+	fmt.Printf("  %s\n", output.Bold(fmt.Sprintf("📋 %s — Steps", focusRepo)))
+	fmt.Println()
+
+	for _, step := range investigationSteps {
+		if completed[step.ID] {
+			fmt.Printf("    %s  %s\n", output.Green("✓"), step.Label)
+		} else if step.Label == focused.Current && focused.Status == "Running" {
+			fmt.Printf("    %s  %s %s\n", output.Cyan("⠹"), output.Bold(step.Label), output.Dim("← active"))
+		} else {
+			fmt.Printf("    %s  %s\n", output.Dim("○"), output.Dim(step.Label))
+		}
+	}
+
+	// Get errors from workflow history
+	errors := getWorkflowErrors(client, focused.WorkflowID)
+	if len(errors) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", output.Bold(fmt.Sprintf("❌ Errors (%d)", len(errors))))
+		fmt.Println()
+		for _, e := range errors {
+			fmt.Printf("    %s  %s\n", output.Red("✗"), e.Summary)
+			if e.Detail != "" {
+				// Indent detail lines
+				for _, line := range strings.Split(e.Detail, "\n") {
+					if line = strings.TrimSpace(line); line != "" {
+						fmt.Printf("       %s\n", output.Dim(truncate(line, 80)))
+					}
+				}
+			}
+			fmt.Printf("       %s\n", output.Dim(e.Timestamp))
+			fmt.Println()
+		}
+	}
 }
