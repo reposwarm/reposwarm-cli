@@ -83,6 +83,7 @@ Get started:
 	root.AddCommand(newDashboardCmd())
 	root.AddCommand(newErrorsCmd())
 	root.AddCommand(newInvestigateCmd())
+	root.AddCommand(newLogsCmd())
 
 	// Results (includes diff, report as subcommands; show→sections)
 	root.AddCommand(newResultsCmd())
