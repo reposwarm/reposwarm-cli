@@ -22,6 +22,7 @@ func newWorkflowsCmd() *cobra.Command {
 	cmd.AddCommand(newWorkflowsTerminateCmd())
 	cmd.AddCommand(newWorkflowsWatchRepoCmd())
 	cmd.AddCommand(newWatchCmd())
+	cmd.AddCommand(newWorkflowsRetryCmd())
 	return cmd
 }
 

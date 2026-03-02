@@ -28,6 +28,7 @@ type Config struct {
 	TemporalUIPort string `json:"temporalUiPort,omitempty"`
 	APIPort        string `json:"apiPort,omitempty"`
 	UIPort         string `json:"uiPort,omitempty"`
+	InstallDir     string `json:"installDir,omitempty"`
 }
 
 // Effective* methods return the configured value or the built-in default.
@@ -77,6 +78,12 @@ func (c *Config) EffectiveAPIPort() string {
 	return "3000"
 }
 
+func (c *Config) EffectiveInstallDir() string {
+	if c.InstallDir != "" { return c.InstallDir }
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "reposwarm")
+}
+
 func (c *Config) EffectiveUIPort() string {
 	if c.UIPort != "" { return c.UIPort }
 	return "3001"
@@ -98,7 +105,7 @@ func ValidKeys() []string {
 	return []string{
 		"apiUrl", "apiToken", "region", "defaultModel", "chunkSize", "outputFormat",
 		"workerRepoUrl", "apiRepoUrl", "uiRepoUrl", "hubUrl", "dynamodbTable",
-		"temporalPort", "temporalUiPort", "apiPort", "uiPort",
+		"temporalPort", "temporalUiPort", "apiPort", "uiPort", "installDir",
 	}
 }
 
@@ -215,6 +222,8 @@ func Set(cfg *Config, key, value string) error {
 		cfg.APIPort = value
 	case "uiPort":
 		cfg.UIPort = value
+	case "installDir":
+		cfg.InstallDir = value
 	default:
 		return fmt.Errorf("unknown config key: %s (valid: %s)", key, strings.Join(ValidKeys(), ", "))
 	}

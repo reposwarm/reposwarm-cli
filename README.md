@@ -83,12 +83,13 @@ reposwarm url all                 # View all service URLs
 | `reposwarm workflows progress` | Show investigation progress across repos |
 | `reposwarm workflows watch [id]` | Watch workflows in real-time (`--interval`) |
 | `reposwarm workflows terminate <id>` | Stop a workflow (`-y`, `--reason`) |
+| `reposwarm workflows retry <id>` | Terminate + re-investigate same repo (`-y`, `--model`) |
 
 ### Monitoring & Debugging
 | Command | Description |
 |---------|-------------|
 | `reposwarm dashboard` | Live TUI dashboard (`--repo` for focused view) |
-| `reposwarm errors` | List workflow errors (`--repo` filter) |
+| `reposwarm errors` | List errors + stall warnings (`--repo`, `--stall-threshold`) |
 | `reposwarm logs [service]` | View local service logs (`-f` to follow, `-n` lines) |
 
 ### Results & Analysis
@@ -185,24 +186,35 @@ reposwarm config set hubUrl https://github.com/your-org/reposwarm-ui
 When an investigation seems stuck, use these commands to diagnose:
 
 ```bash
-# 1. Check activity-level status — which step is running/stuck?
+# 1. Full system health — now checks worker env vars and log errors
+reposwarm doctor
+
+# 2. Errors + stall detection — flags activities that never started
+reposwarm errors
+
+# 3. Activity-level status — which step is running/stuck?
 reposwarm wf status <workflow-id> -v
 
-# 2. View full Temporal event history — was the activity even scheduled?
-reposwarm wf history <workflow-id>
-
-# 3. Filter for activity events only
+# 4. View full Temporal event history
 reposwarm wf history <workflow-id> --filter Activity
-
-# 4. Check for errors across all workflows
-reposwarm errors
 
 # 5. Tail worker logs (local mode)
 reposwarm logs worker -f
 
-# 6. View all service logs
-reposwarm logs -n 100
+# 6. Fix the issue, then retry the stuck workflow
+reposwarm wf retry <workflow-id>
 ```
+
+### What `doctor` checks (local mode):
+- Config, API, Temporal, DynamoDB, Worker connectivity
+- **Worker environment**: ANTHROPIC_API_KEY, GITHUB_TOKEN, AWS credentials
+- **Worker logs**: scans last 20 lines for errors/tracebacks
+- Local tools (Git, Docker, Node, Python, AWS CLI), network
+
+### What `errors` detects:
+- Activity failures, timeouts, workflow failures
+- **Stalled activities**: scheduled but never started (worker can't pick up tasks)
+- **Zero-progress workflows**: running > 30 min with no completed steps
 
 ## Environment Variables
 

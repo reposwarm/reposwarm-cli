@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/loki-bedlam/reposwarm-cli/internal/api"
 	"github.com/loki-bedlam/reposwarm-cli/internal/output"
@@ -20,9 +21,20 @@ type WorkflowError struct {
 	ActivityID string `json:"activityId,omitempty"`
 }
 
+// StallWarning represents a stalled activity or zero-progress workflow.
+type StallWarning struct {
+	WorkflowID string `json:"workflowId"`
+	Repo       string `json:"repo"`
+	Type       string `json:"type"` // "stalled_activity", "zero_progress"
+	Summary    string `json:"summary"`
+	Detail     string `json:"detail,omitempty"`
+	Duration   string `json:"duration"`
+}
+
 func newErrorsCmd() *cobra.Command {
 	var repo string
 	var limit int
+	var stallMinutes int
 
 	cmd := &cobra.Command{
 		Use:   "errors",
@@ -59,8 +71,53 @@ Examples:
 				allErrors = append(allErrors, errors...)
 			}
 
+			// Stall detection: check running workflows
+			var stalls []StallWarning
+			for _, w := range result.Executions {
+				if w.Status != "RUNNING" && w.Status != "Running" {
+					continue
+				}
+				if w.Type != "InvestigateSingleRepoWorkflow" && w.Type != "InvestigateReposWorkflow" {
+					continue
+				}
+				name := repoName(w.WorkflowID)
+				if repo != "" && name != repo {
+					continue
+				}
+
+				stalls = append(stalls, detectStalls(client, w, stallMinutes)...)
+			}
+
 			if flagJSON {
-				return output.JSON(allErrors)
+				result := map[string]any{
+					"errors": allErrors,
+					"stalls": stalls,
+				}
+				return output.JSON(result)
+			}
+
+			// Show stall warnings first
+			if len(stalls) > 0 {
+				output.F.Println()
+				output.F.Section(fmt.Sprintf("⚠ Stall Warnings (%d)", len(stalls)))
+				for _, s := range stalls {
+					icon := output.Yellow("⚠")
+					fmt.Printf("  %s %s (%s)\n", icon, output.Bold(s.Repo), s.Duration)
+					fmt.Printf("    %s\n", s.Summary)
+					if s.Detail != "" {
+						fmt.Printf("    %s %s\n", output.Dim("→"), output.Dim(s.Detail))
+					}
+					fmt.Println()
+				}
+			}
+
+			if len(allErrors) == 0 && len(stalls) == 0 {
+				if repo != "" {
+					output.F.Success(fmt.Sprintf("No errors or stalls found for '%s' 🎉", repo))
+				} else {
+					output.F.Success("No errors or stalls found in recent investigations 🎉")
+				}
+				return nil
 			}
 
 			if len(allErrors) == 0 {
@@ -115,7 +172,169 @@ Examples:
 
 	cmd.Flags().StringVar(&repo, "repo", "", "Filter errors by repo name")
 	cmd.Flags().IntVar(&limit, "limit", 50, "Max workflows to scan")
+	cmd.Flags().IntVar(&stallMinutes, "stall-threshold", 10, "Minutes before flagging stalled activities")
 	return cmd
+}
+
+// detectStalls checks a running workflow for stalled activities and zero progress.
+func detectStalls(client *api.Client, w api.WorkflowExecution, stallMinutes int) []StallWarning {
+	var stalls []StallWarning
+	repo := repoName(w.WorkflowID)
+	threshold := time.Duration(stallMinutes) * time.Minute
+
+	// Parse start time
+	startTime, err := time.Parse(time.RFC3339, w.StartTime)
+	if err != nil {
+		// Try other formats
+		startTime, err = time.Parse("2006-01-02T15:04:05Z", w.StartTime)
+	}
+	runDuration := time.Since(startTime)
+
+	// Fetch history
+	var histResp struct {
+		Data api.WorkflowHistory `json:"data"`
+	}
+	if err := client.Get(ctx(), fmt.Sprintf("/workflows/%s/history", w.WorkflowID), &histResp); err != nil {
+		return stalls
+	}
+
+	// Track activity states
+	type actState struct {
+		name          string
+		scheduledAt   time.Time
+		startedAt     time.Time
+		completed     bool
+	}
+	activities := map[string]*actState{}
+
+	for _, event := range histResp.Data.Events {
+		eventType, _ := event["eventType"].(string)
+		eventTime, _ := event["eventTime"].(string)
+		details, _ := event["details"].(map[string]any)
+
+		var ts time.Time
+		if t, err := time.Parse(time.RFC3339, eventTime); err == nil {
+			ts = t
+		}
+
+		// Handle both "ActivityTaskScheduled" and "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED" formats
+		switch {
+		case strings.Contains(eventType, "ActivityTaskScheduled"):
+			actName := extractActivityName(details)
+			if actName != "" {
+				activities[actName] = &actState{name: actName, scheduledAt: ts}
+			}
+		case strings.Contains(eventType, "ActivityTaskStarted"):
+			// Match by finding the most recent unstarted activity
+			for _, a := range activities {
+				if a.startedAt.IsZero() && !a.completed {
+					a.startedAt = ts
+					break
+				}
+			}
+		case strings.Contains(eventType, "ActivityTaskCompleted"):
+			for _, a := range activities {
+				if !a.startedAt.IsZero() && !a.completed {
+					a.completed = true
+					break
+				}
+			}
+		case strings.Contains(eventType, "ActivityTaskFailed"),
+			strings.Contains(eventType, "ActivityTaskTimedOut"):
+			for _, a := range activities {
+				if !a.startedAt.IsZero() && !a.completed {
+					a.completed = true // failed counts as "done" for stall detection
+					break
+				}
+			}
+		}
+	}
+
+	// Check for stalled activities
+	now := time.Now()
+	for _, a := range activities {
+		if a.completed {
+			continue
+		}
+		if a.startedAt.IsZero() && !a.scheduledAt.IsZero() {
+			// Scheduled but never started
+			waitTime := now.Sub(a.scheduledAt)
+			if waitTime > threshold {
+				stalls = append(stalls, StallWarning{
+					WorkflowID: w.WorkflowID,
+					Repo:       repo,
+					Type:       "stalled_activity",
+					Summary:    fmt.Sprintf("Activity '%s' scheduled %s ago, never started", a.name, formatRelativeTime(waitTime)),
+					Detail:     "Worker may not be picking up tasks. Check: reposwarm doctor",
+					Duration:   formatRelativeTime(waitTime),
+				})
+			}
+		} else if !a.startedAt.IsZero() {
+			// Started but never completed
+			runTime := now.Sub(a.startedAt)
+			if runTime > threshold*3 { // 3x threshold for running activities
+				stalls = append(stalls, StallWarning{
+					WorkflowID: w.WorkflowID,
+					Repo:       repo,
+					Type:       "stalled_activity",
+					Summary:    fmt.Sprintf("Activity '%s' running for %s without completing", a.name, formatRelativeTime(runTime)),
+					Detail:     "Activity may be stuck. Check: reposwarm logs worker",
+					Duration:   formatRelativeTime(runTime),
+				})
+			}
+		}
+	}
+
+	// Check for zero progress (only if running > 30 min)
+	if runDuration > 30*time.Minute {
+		// Count completed activities
+		completedCount := 0
+		for _, a := range activities {
+			if a.completed {
+				completedCount++
+			}
+		}
+
+		if completedCount == 0 {
+			stalls = append(stalls, StallWarning{
+				WorkflowID: w.WorkflowID,
+				Repo:       repo,
+				Type:       "zero_progress",
+				Summary:    fmt.Sprintf("0 investigation steps completed after %s", formatRelativeTime(runDuration)),
+				Detail:     "Expected progress by now. Check: reposwarm logs worker",
+				Duration:   formatRelativeTime(runDuration),
+			})
+		}
+	}
+
+	return stalls
+}
+
+func extractActivityName(details map[string]any) string {
+	if details == nil {
+		return ""
+	}
+	// Try direct activityType string
+	if at, ok := details["activityType"].(string); ok {
+		return at
+	}
+	// Try activityType as object with name
+	if at, ok := details["activityType"].(map[string]any); ok {
+		if name, ok := at["name"].(string); ok {
+			return name
+		}
+	}
+	// Try nested attributes
+	for _, v := range details {
+		if sub, ok := v.(map[string]any); ok {
+			if at, ok := sub["activityType"].(map[string]any); ok {
+				if name, ok := at["name"].(string); ok {
+					return name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // getWorkflowErrors extracts errors from a workflow's event history.
