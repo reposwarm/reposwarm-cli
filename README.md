@@ -84,12 +84,26 @@ reposwarm url all                 # View all service URLs
 | `reposwarm workflows watch [id]` | Watch workflows in real-time (`--interval`) |
 | `reposwarm workflows terminate <id>` | Stop a workflow (`-y`, `--reason`) |
 | `reposwarm workflows retry <id>` | Terminate + re-investigate same repo (`-y`, `--model`) |
+| `reposwarm workflows cancel <id>` | Graceful cancellation — current activity completes first |
+| `reposwarm workflows prune` | Clean up old workflows (`--older`, `--status`, `--dry-run`) |
 
 ### Monitoring & Debugging
 | Command | Description |
 |---------|-------------|
 | `reposwarm dashboard` | Live TUI dashboard (`--repo` for focused view) |
-| `reposwarm errors` | List errors + stall warnings (`--repo`, `--stall-threshold`) |
+| `reposwarm errors` | List errors + stall warnings + worker failures (`--repo`, `--stall-threshold`) |
+
+### Workers & Services
+
+| Command | Description |
+|---------|-------------|
+| `reposwarm workers list` | List all workers with health, task queue, env status (`--verbose`) |
+| `reposwarm workers show <name>` | Deep-dive on a worker: env, logs, tasks (`--logs`, `--no-logs`) |
+| `reposwarm services` | Process table — all services with PID, status, port, manager |
+| `reposwarm restart [service]` | Restart one or all services (`--wait`, `--timeout`) |
+| `reposwarm stop <service>` | Stop a service (graceful SIGTERM) |
+| `reposwarm start <service>` | Start a service (`--wait` for health check) |
+| `reposwarm preflight [repo]` | Verify system readiness without starting an investigation |
 | `reposwarm logs [service]` | View local service logs (`-f` to follow, `-n` lines) |
 
 ### Results & Analysis
