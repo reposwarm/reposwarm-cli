@@ -78,10 +78,18 @@ reposwarm url all                 # View all service URLs
 | `reposwarm investigate <repo>` | Investigate single repo (`--model`, `--chunk-size`) |
 | `reposwarm investigate --all` | Investigate all enabled repos (`--parallel`) |
 | `reposwarm workflows list` | List recent workflows (`--limit`) |
-| `reposwarm workflows status <id>` | Workflow details |
+| `reposwarm workflows status <id>` | Workflow details (`-v` for activity checklist) |
+| `reposwarm workflows history <id>` | Temporal event history (`--filter`, `--run-id`, `--limit`) |
 | `reposwarm workflows progress` | Show investigation progress across repos |
 | `reposwarm workflows watch [id]` | Watch workflows in real-time (`--interval`) |
 | `reposwarm workflows terminate <id>` | Stop a workflow (`-y`, `--reason`) |
+
+### Monitoring & Debugging
+| Command | Description |
+|---------|-------------|
+| `reposwarm dashboard` | Live TUI dashboard (`--repo` for focused view) |
+| `reposwarm errors` | List workflow errors (`--repo` filter) |
+| `reposwarm logs [service]` | View local service logs (`-f` to follow, `-n` lines) |
 
 ### Results & Analysis
 | Command | Description |
@@ -170,6 +178,30 @@ reposwarm config set temporalUiPort 8233
 reposwarm config set apiPort 3000
 reposwarm config set uiPort 3001
 reposwarm config set hubUrl https://github.com/your-org/reposwarm-ui
+```
+
+## Debugging Stuck Investigations
+
+When an investigation seems stuck, use these commands to diagnose:
+
+```bash
+# 1. Check activity-level status — which step is running/stuck?
+reposwarm wf status <workflow-id> -v
+
+# 2. View full Temporal event history — was the activity even scheduled?
+reposwarm wf history <workflow-id>
+
+# 3. Filter for activity events only
+reposwarm wf history <workflow-id> --filter Activity
+
+# 4. Check for errors across all workflows
+reposwarm errors
+
+# 5. Tail worker logs (local mode)
+reposwarm logs worker -f
+
+# 6. View all service logs
+reposwarm logs -n 100
 ```
 
 ## Environment Variables
