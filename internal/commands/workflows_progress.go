@@ -14,9 +14,9 @@ import (
 func newWorkflowsProgressCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "progress",
-		Short: "Show progress of the active daily investigation",
-		Long: `Shows a summary of the currently running daily investigation workflow,
-including completed, in-progress, and pending repositories.`,
+		Short: "Show progress of active investigations",
+		Long: `Shows a summary of active investigations (daily batch or individual).
+Displays completed, in-progress, and pending repositories.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
@@ -29,7 +29,7 @@ including completed, in-progress, and pending repositories.`,
 				return err
 			}
 
-			// Find the active daily workflow
+			// Find active workflows — daily batch OR standalone single-repo
 			var daily *api.WorkflowExecution
 			for i, w := range result.Executions {
 				if w.Type == "InvestigateReposWorkflow" && w.Status == "Running" {
@@ -38,22 +38,32 @@ including completed, in-progress, and pending repositories.`,
 				}
 			}
 
-			if daily == nil {
-				if flagJSON {
-					return output.JSON(map[string]any{"error": "no active daily workflow"})
-				}
-				output.Infof("No active daily investigation workflow found")
-				return nil
-			}
-
-			// Collect child workflows started after the daily
+			// Collect investigation workflows
 			var children []api.WorkflowExecution
-			for _, w := range result.Executions {
-				if w.Type != "InvestigateSingleRepoWorkflow" {
-					continue
+			if daily != nil {
+				// Daily batch mode: find child workflows started after the daily
+				for _, w := range result.Executions {
+					if w.Type == "InvestigateSingleRepoWorkflow" && w.StartTime >= daily.StartTime {
+						children = append(children, w)
+					}
 				}
-				if w.StartTime >= daily.StartTime {
-					children = append(children, w)
+			} else {
+				// No daily batch — look for any running single-repo investigations
+				var anyRunning bool
+				for _, w := range result.Executions {
+					if w.Type == "InvestigateSingleRepoWorkflow" {
+						if w.Status == "Running" {
+							anyRunning = true
+						}
+						children = append(children, w)
+					}
+				}
+				if !anyRunning {
+					if flagJSON {
+						return output.JSON(map[string]any{"error": "no active investigations"})
+					}
+					output.Infof("No active investigations found")
+					return nil
 				}
 			}
 
@@ -77,25 +87,31 @@ including completed, in-progress, and pending repositories.`,
 				return running[i].WorkflowID < running[j].WorkflowID
 			})
 
-			// Count total repos from repo list
-			var repos []api.Repository
-			totalRepos := 36 // fallback
-			if err := client.Get(ctx(), "/repos", &repos); err == nil {
-				enabled := 0
-				for _, r := range repos {
-					if r.Enabled {
-						enabled++
+			// Count total repos
+			var totalRepos int
+			if daily != nil {
+				// Daily mode: count enabled repos
+				var repos []api.Repository
+				totalRepos = 36 // fallback
+				if err := client.Get(ctx(), "/repos", &repos); err == nil {
+					enabled := 0
+					for _, r := range repos {
+						if r.Enabled {
+							enabled++
+						}
+					}
+					if enabled > 0 {
+						totalRepos = enabled
 					}
 				}
-				if enabled > 0 {
-					totalRepos = enabled
-				}
+			} else {
+				totalRepos = len(children)
 			}
 
 			if flagJSON {
 				return output.JSON(map[string]any{
-					"dailyWorkflowId": daily.WorkflowID,
-					"startTime":       daily.StartTime,
+					"dailyWorkflowId": func() string { if daily != nil { return daily.WorkflowID }; return "" }(),
+					"startTime":       func() string { if daily != nil { return daily.StartTime }; return "" }(),
 					"totalRepos":      totalRepos,
 					"completed":       len(completed),
 					"running":         len(running),
@@ -109,10 +125,16 @@ including completed, in-progress, and pending repositories.`,
 
 			pending := totalRepos - len(children)
 
-			output.F.Section("Daily Investigation Progress")
-			output.F.KeyValue("Workflow", daily.WorkflowID)
-			output.F.KeyValue("Started", daily.StartTime[:19])
-			output.F.KeyValue("Elapsed", elapsed(daily.StartTime))
+			title := "Investigation Progress"
+			if daily != nil {
+				title = "Daily Investigation Progress"
+			}
+			output.F.Section(title)
+			if daily != nil {
+				output.F.KeyValue("Workflow", daily.WorkflowID)
+				output.F.KeyValue("Started", daily.StartTime[:19])
+				output.F.KeyValue("Elapsed", elapsed(daily.StartTime))
+			}
 			output.F.Progress(len(completed), totalRepos)
 			output.F.Println()
 			output.F.Printf("Completed: %-3d  Running: %-3d  Failed: %-3d  Pending: %-3d\n",
