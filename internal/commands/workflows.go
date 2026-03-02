@@ -123,6 +123,45 @@ func newWorkflowsStatusCmd() *cobra.Command {
 				if err := showActivityDetails(client, args[0], startTime); err != nil {
 					F.Warning(fmt.Sprintf("Could not fetch activity details: %v", err))
 				}
+
+				// Worker attribution — key diagnostic info
+				F.Println()
+				F.Section("Worker Status")
+				workers := gatherWorkerInfo(client)
+				healthy := 0
+				for _, w := range workers {
+					if w.Status == "healthy" {
+						healthy++
+					}
+				}
+				queue := ""
+				if wf.TaskQueue != "" {
+					queue = wf.TaskQueue
+				} else {
+					queue = "investigate-task-queue"
+				}
+				F.KeyValue("Task Queue", queue)
+				F.KeyValue("Healthy Workers", fmt.Sprintf("%d of %d", healthy, len(workers)))
+				for _, w := range workers {
+					icon := output.Green("✅")
+					if w.Status != "healthy" {
+						icon = output.Red("❌")
+					}
+					detail := w.Status
+					if len(w.EnvErrors) > 0 {
+						detail += fmt.Sprintf(" (%d env errors)", len(w.EnvErrors))
+					}
+					F.Printf("  %s %s: %s\n", icon, w.Name, detail)
+				}
+
+				// Diagnosis
+				if healthy == 0 && len(workers) > 0 {
+					F.Println()
+					F.Section("Diagnosis")
+					F.Warning("No healthy workers available on '" + queue + "'")
+					F.Info("Run: reposwarm workers list to see worker status")
+					F.Info("Run: reposwarm doctor for full diagnostics")
+				}
 			}
 
 			F.Println()
