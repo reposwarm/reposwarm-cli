@@ -17,235 +17,387 @@ cd reposwarm-cli
 go build -o reposwarm ./cmd/reposwarm
 ```
 
-## Quick Start
+---
 
-### Connect to Existing Server
+## Cookbook
+
+Real workflows, copy-paste ready. Each recipe is a complete flow.
+
+### 🚀 First Time Setup (Local)
+
 ```bash
-reposwarm config init             # Connect to a RepoSwarm server
-reposwarm status                  # Check connection
-reposwarm repos list              # List tracked repos
-reposwarm investigate <repo>      # Run an investigation
-reposwarm results sections <repo> # Browse results
+reposwarm new --local             # Bootstrap everything: Temporal, API, Worker, UI
+reposwarm status                  # Verify connection
+reposwarm doctor                  # Full health check
+reposwarm show ui                 # Open the web UI
 ```
 
-### Bootstrap Local Installation
-```bash
-reposwarm new --local             # Set up complete local environment
-# This will:
-#   1. Clone worker, API, and UI repositories
-#   2. Start Temporal server + DynamoDB local
-#   3. Start worker processes
-#   4. Launch API server and UI
-#   5. Configure CLI to connect to local API
+### 🚀 First Time Setup (Remote Server)
 
-reposwarm show temporal           # Open Temporal UI
-reposwarm show ui                 # Open RepoSwarm UI
-reposwarm url all                 # View all service URLs
+```bash
+reposwarm config init             # Interactive setup (enter API URL + token)
+reposwarm status                  # Verify connection
 ```
 
-## Commands
+---
 
-### Setup & Diagnostics
+### 🔍 Run Your First Investigation
+
+```bash
+reposwarm repos add my-app --url https://github.com/org/my-app
+reposwarm investigate my-app      # Pre-flight checks run automatically
+reposwarm wf progress             # Watch it work
+reposwarm results sections my-app # Browse the results
+reposwarm results read my-app     # Read the full report
+```
+
+### 🔍 Investigate All Repos
+
+```bash
+reposwarm investigate --all --parallel 3
+reposwarm dashboard               # Live TUI — progress for every repo
+```
+
+### 🔍 Check Before You Start (Dry Run)
+
+```bash
+reposwarm preflight my-app        # System + repo readiness check
+reposwarm investigate my-app --dry-run  # Pre-flight only, no workflow created
+```
+
+---
+
+### 🩺 Something's Stuck — Full Diagnosis
+
+The 2-minute flow that finds any issue:
+
+```bash
+# Step 1: What's wrong?
+reposwarm doctor
+
+# Step 2: Check for stalled workflows + worker errors
+reposwarm errors
+
+# Step 3: Zoom in on a specific workflow
+reposwarm wf status <workflow-id> -v
+
+# Step 4: See the Temporal event timeline
+reposwarm wf history <workflow-id>
+
+# Step 5: Check worker logs directly
+reposwarm logs worker -f
+```
+
+**What `doctor` catches:**
+- Missing env vars (ANTHROPIC_API_KEY, GITHUB_TOKEN, AWS credentials)
+- Worker log errors and tracebacks
+- Per-worker health in multi-worker setups
+- Stalled workflows with zero progress
+- Config, API, Temporal, DynamoDB connectivity
+
+**What `errors` catches:**
+- Activity failures, timeouts, workflow failures
+- Stalled activities (scheduled but never started — worker can't pick them up)
+- Zero-progress workflows (running > 30 min with nothing completed)
+- Worker startup/validation failures
+
+---
+
+### 🔧 Fix Missing Environment Variables
+
+When `doctor` tells you env vars are missing:
+
+```bash
+# See what's set and what's missing
+reposwarm config worker-env list
+
+# Set the missing vars
+reposwarm config worker-env set ANTHROPIC_API_KEY sk-ant-your-key-here
+reposwarm config worker-env set GITHUB_TOKEN ghp_your-token-here
+
+# Restart the worker to pick up changes
+reposwarm restart worker --wait
+
+# Verify it's healthy now
+reposwarm doctor
+```
+
+### 🔧 Fix a Stuck Investigation (End-to-End)
+
+The full fix loop — from broken to running in 6 commands:
+
+```bash
+reposwarm doctor                  # → finds: ANTHROPIC_API_KEY NOT SET
+reposwarm config worker-env set ANTHROPIC_API_KEY sk-ant-xxx
+reposwarm config worker-env set GITHUB_TOKEN ghp_xxx
+reposwarm restart worker --wait   # → ✅ worker-1 healthy
+reposwarm wf retry <workflow-id>  # → terminates old, starts new
+reposwarm wf progress             # → watch it go
+```
+
+### 🔧 Replace a Stuck Investigation
+
+```bash
+# Terminates any existing workflow for this repo, then starts fresh
+reposwarm investigate my-app --replace
+```
+
+### 🔧 Retry a Failed Investigation with a Different Model
+
+```bash
+reposwarm wf retry <workflow-id> --model us.anthropic.claude-opus-4-6
+```
+
+---
+
+### 📊 Monitor Running Investigations
+
+```bash
+# Live dashboard (htop-style, all repos)
+reposwarm dashboard
+
+# Focus on one repo
+reposwarm dashboard --repo my-app
+
+# Watch a specific workflow with step checklist
+reposwarm wf progress --repo my-app --wait
+
+# Quick snapshot for scripts/agents
+reposwarm dashboard --json
+reposwarm errors --json
+```
+
+### 📊 Check Worker Health
+
+```bash
+# List all workers
+reposwarm workers list
+
+# Deep-dive on a specific worker
+reposwarm workers show worker-1
+
+# See all services (PID, port, status)
+reposwarm services
+```
+
+---
+
+### 🔎 Search and Explore Results
+
+```bash
+# Search across all investigations
+reposwarm results search "authentication" --max 10
+
+# Read a specific section
+reposwarm results read my-app authentication
+
+# Compare two repos
+reposwarm results diff repo-a repo-b
+
+# Export everything to markdown files
+reposwarm results export --all -d ./docs
+
+# Audit completeness (all 17 sections present?)
+reposwarm results audit
+```
+
+---
+
+### 🧹 Cleanup and Maintenance
+
+```bash
+# Clean up old workflows (completed/failed/terminated)
+reposwarm wf prune --older 7d --dry-run    # Preview first
+reposwarm wf prune --older 7d -y           # Actually prune
+
+# Prune only failed workflows
+reposwarm wf prune --status failed -y
+
+# Gracefully cancel a running investigation (finishes current step)
+reposwarm wf cancel <workflow-id>
+
+# Hard terminate (immediate)
+reposwarm wf terminate <workflow-id> -y
+```
+
+---
+
+### ⚙️ Service Management (Local Mode)
+
+```bash
+# See what's running
+reposwarm services
+
+# Restart everything
+reposwarm restart
+
+# Restart just the worker
+reposwarm restart worker --wait
+
+# Stop/start individual services
+reposwarm stop worker
+reposwarm start worker --wait
+
+# Check all service URLs
+reposwarm url all
+```
+
+---
+
+### 🤖 Agent / Script Integration
+
+Every command supports `--json` for structured output and `--for-agent` for plain text:
+
+```bash
+# Check system health programmatically
+reposwarm doctor --json | jq '.checks[] | select(.status=="fail")'
+
+# Get all errors as JSON
+reposwarm errors --json | jq '.workerErrors, .stalls, .errors'
+
+# Single dashboard snapshot (no TUI, exits immediately)
+reposwarm dashboard --json
+
+# Pre-flight check before scripted investigation
+reposwarm preflight my-app --json | jq '.ready'
+
+# Investigate with no prompts
+reposwarm investigate my-app --force --json
+
+# Worker status for monitoring
+reposwarm workers list --json | jq '.workers[] | {name, status, envStatus}'
+
+# Service health for monitoring
+reposwarm services --json | jq '.[] | {name, status, pid}'
+```
+
+---
+
+## Command Reference
+
+### Setup & Configuration
+
 | Command | Description |
 |---------|-------------|
 | `reposwarm config init` | Interactive setup wizard |
-| `reposwarm config show` | Display current config |
-| `reposwarm config set <key> <value>` | Update config value |
+| `reposwarm config show` | Display config (includes server config + model drift warning) |
+| `reposwarm config set <key> <value>` | Update a config value |
 | `reposwarm config server` | View server-side config |
 | `reposwarm config server-set <key> <value>` | Update server config |
-| `reposwarm status` | Quick API health check with latency |
-| `reposwarm doctor` | Deep diagnosis (config, API, Temporal, DynamoDB, worker, network) |
-| `reposwarm new` | Bootstrap a new local installation (`--local` for complete setup) |
-| `reposwarm show <target>` | Open URL in browser (temporal, ui, api, hub) |
-| `reposwarm url <service>` | Print service URL (temporal, temporal-grpc, ui, api, hub, all) |
-| `reposwarm version` | Print version (`-v` / `--version` also work) |
-| `reposwarm upgrade` | Self-update to latest version (`--force` to reinstall) |
+| `reposwarm config worker-env list` | Show worker env vars (`--reveal` for unmasked values) |
+| `reposwarm config worker-env set <K> <V>` | Set worker env var (`--restart` to auto-restart) |
+| `reposwarm config worker-env unset <K>` | Remove worker env var |
+| `reposwarm new --local` | Bootstrap complete local installation |
+| `reposwarm upgrade` | Self-update (`--force` to reinstall) |
 
-### Repositories
+### Diagnostics
+
 | Command | Description |
 |---------|-------------|
-| `reposwarm repos list` | List all tracked repos (`--source`, `--filter`, `--enabled`) |
-| `reposwarm repos show <name>` | Detailed single repo view |
-| `reposwarm repos add <name>` | Add a repo (`--url`, `--source`) |
-| `reposwarm repos remove <name>` | Remove a repo (`-y` skip confirm) |
-| `reposwarm repos enable <name>` | Enable for investigation |
-| `reposwarm repos disable <name>` | Disable from investigation |
-| `reposwarm repos discover` | Auto-discover CodeCommit repos |
-
-### Investigation & Workflows
-| Command | Description |
-|---------|-------------|
-| `reposwarm investigate <repo>` | Investigate single repo (`--model`, `--chunk-size`) |
-| `reposwarm investigate --all` | Investigate all enabled repos (`--parallel`) |
-| `reposwarm workflows list` | List recent workflows (`--limit`) |
-| `reposwarm workflows status <id>` | Workflow details (`-v` for activity checklist) |
-| `reposwarm workflows history <id>` | Temporal event history (`--filter`, `--run-id`, `--limit`) |
-| `reposwarm workflows progress` | Show investigation progress across repos |
-| `reposwarm workflows watch [id]` | Watch workflows in real-time (`--interval`) |
-| `reposwarm workflows terminate <id>` | Stop a workflow (`-y`, `--reason`) |
-| `reposwarm workflows retry <id>` | Terminate + re-investigate same repo (`-y`, `--model`) |
-| `reposwarm workflows cancel <id>` | Graceful cancellation — current activity completes first |
-| `reposwarm workflows prune` | Clean up old workflows (`--older`, `--status`, `--dry-run`) |
-
-### Monitoring & Debugging
-| Command | Description |
-|---------|-------------|
-| `reposwarm dashboard` | Live TUI dashboard (`--repo` for focused view) |
-| `reposwarm errors` | List errors + stall warnings + worker failures (`--repo`, `--stall-threshold`) |
+| `reposwarm status` | Quick API health + latency |
+| `reposwarm doctor` | Full diagnosis: config, API, Temporal, workers, env, logs, stalls |
+| `reposwarm preflight [repo]` | Verify system readiness for an investigation |
+| `reposwarm errors` | Errors + stalls + worker failures (`--repo`, `--stall-threshold`) |
+| `reposwarm logs [service]` | View service logs (`-f` follow, `-n` lines) |
 
 ### Workers & Services
 
 | Command | Description |
 |---------|-------------|
-| `reposwarm workers list` | List all workers with health, task queue, env status (`--verbose`) |
-| `reposwarm workers show <name>` | Deep-dive on a worker: env, logs, tasks (`--logs`, `--no-logs`) |
-| `reposwarm services` | Process table — all services with PID, status, port, manager |
-| `reposwarm restart [service]` | Restart one or all services (`--wait`, `--timeout`) |
-| `reposwarm stop <service>` | Stop a service (graceful SIGTERM) |
-| `reposwarm start <service>` | Start a service (`--wait` for health check) |
-| `reposwarm preflight [repo]` | Verify system readiness without starting an investigation |
-| `reposwarm logs [service]` | View local service logs (`-f` to follow, `-n` lines) |
+| `reposwarm workers list` | All workers: health, queue, env status (`-v` for PID/host) |
+| `reposwarm workers show <name>` | Worker deep-dive: env, logs, tasks |
+| `reposwarm services` | Process table: PID, status, port, manager |
+| `reposwarm restart [service]` | Restart one or all (`--wait`, `--timeout`) |
+| `reposwarm stop <service>` | Graceful stop |
+| `reposwarm start <service>` | Start service (`--wait` for health check) |
+
+### Repositories
+
+| Command | Description |
+|---------|-------------|
+| `reposwarm repos list` | List repos (`--source`, `--filter`, `--enabled`) |
+| `reposwarm repos show <name>` | Detailed repo view |
+| `reposwarm repos add <name>` | Add repo (`--url`, `--source`) |
+| `reposwarm repos remove <name>` | Remove (`-y` skip confirm) |
+| `reposwarm repos enable/disable <name>` | Toggle investigation eligibility |
+| `reposwarm repos discover` | Auto-discover CodeCommit repos |
+
+### Investigation & Workflows
+
+| Command | Description |
+|---------|-------------|
+| `reposwarm investigate <repo>` | Start investigation (pre-flight auto-runs) |
+| | `--force` skip pre-flight, `--replace` terminate existing, `--dry-run` |
+| `reposwarm investigate --all` | All enabled repos (`--parallel`) |
+| `reposwarm wf list` | List recent workflows (`--limit`) |
+| `reposwarm wf status <id>` | Workflow details (`-v` for activities + worker attribution) |
+| `reposwarm wf history <id>` | Temporal event timeline (`--filter`, `--limit`) |
+| `reposwarm wf progress` | Progress across repos (`--repo`, `--wait`) |
+| `reposwarm wf watch [id]` | Live watch (`--interval`) |
+| `reposwarm wf retry <id>` | Terminate + re-investigate (`-y`, `--model`) |
+| `reposwarm wf cancel <id>` | Graceful cancel (current activity completes) |
+| `reposwarm wf terminate <id>` | Hard stop (`-y`, `--reason`) |
+| `reposwarm wf prune` | Cleanup old workflows (`--older`, `--status`, `--dry-run`) |
+| `reposwarm dashboard` | Live TUI (`--repo` focused, `--json` single snapshot) |
 
 ### Results & Analysis
+
 | Command | Description |
 |---------|-------------|
-| `reposwarm results list` | Repos with investigation results |
-| `reposwarm results sections <repo>` | List sections for a repo |
+| `reposwarm results list` | Repos with results |
+| `reposwarm results sections <repo>` | Section list |
 | `reposwarm results read <repo> [section]` | Read results (`--raw` for markdown) |
-| `reposwarm results meta <repo> [section]` | Metadata only |
+| `reposwarm results search <query>` | Full-text search (`--repo`, `--section`, `--max`) |
 | `reposwarm results export <repo> -o file.md` | Export to file |
-| `reposwarm results export --all -d ./docs` | Export all repos to directory |
-| `reposwarm results search <query>` | Search results (`--repo`, `--section`, `--max`) |
-| `reposwarm results audit` | Validate all repos have complete sections |
+| `reposwarm results export --all -d ./docs` | Export all |
+| `reposwarm results audit` | Validate completeness |
 | `reposwarm results diff <repo1> <repo2>` | Compare investigations |
-| `reposwarm results report [repos...] -o f.md` | Consolidated report (`--sections`) |
+| `reposwarm results report [repos...] -o f.md` | Consolidated report |
 
 ### Prompts
+
 | Command | Description |
 |---------|-------------|
-| `reposwarm prompts list` | List prompts (derives from results if API returns empty) |
-| `reposwarm prompts show <name>` | Show template (`--raw`) |
-| `reposwarm prompts create <name>` | Create (`--type`, `--template-file`) |
-| `reposwarm prompts update <name>` | Update template/description |
-| `reposwarm prompts delete <name>` | Delete |
-| `reposwarm prompts toggle <name>` | Toggle enabled/disabled |
+| `reposwarm prompts list` | List prompts |
+| `reposwarm prompts show <name>` | View template (`--raw`) |
+| `reposwarm prompts create/update/delete <name>` | Manage prompts |
+| `reposwarm prompts toggle <name>` | Enable/disable |
 
 ## Global Flags
 
 | Flag | Description |
 |------|-------------|
-| `--json` | JSON output (agent/script-friendly) |
-| `--for-agent` | Plain text output for agents/scripts |
+| `--json` | JSON output |
+| `--for-agent` | Plain text (no colors/formatting) |
 | `--api-url <url>` | Override API URL |
 | `--api-token <token>` | Override API token |
 | `--verbose` | Debug info |
 | `-v` / `--version` | Print version |
 
-Default output is human-friendly (colors, tables). Use `--for-agent` for plain text or `--json` for structured output.
-
-## Local Development Setup
-
-The `reposwarm new --local` command provides a complete local development environment:
-
-### What it does:
-1. **Clones repositories** — worker, API, and UI from GitHub
-2. **Starts Temporal** — Local Temporal server on port 7233 (UI on 8233)
-3. **Starts DynamoDB Local** — Local AWS DynamoDB on port 8000
-4. **Configures Worker** — Sets up environment, installs dependencies
-5. **Starts API** — Launches API server on port 3000
-6. **Starts UI** — Launches web UI on port 3001
-7. **Configures CLI** — Connects CLI to local API
-
-### Requirements:
-- Docker (for Temporal and DynamoDB)
-- Node.js 18+ (for UI)
-- Python 3.11+ (for worker and API)
-- ~2GB disk space
-- ~1GB RAM
-
-### Usage:
-```bash
-# Bootstrap everything
-reposwarm new --local
-
-# Check status
-reposwarm status
-reposwarm doctor
-
-# Open services in browser
-reposwarm show temporal   # Temporal UI
-reposwarm show ui         # RepoSwarm UI
-reposwarm show api        # API health endpoint
-
-# View all service URLs
-reposwarm url all
-
-# Start investigating
-reposwarm repos add my-repo --url https://github.com/user/repo
-reposwarm investigate my-repo
-```
-
-### Configuration:
-Customize ports and URLs via `reposwarm config set`:
-```bash
-reposwarm config set temporalPort 7233
-reposwarm config set temporalUiPort 8233
-reposwarm config set apiPort 3000
-reposwarm config set uiPort 3001
-reposwarm config set hubUrl https://github.com/your-org/reposwarm-ui
-```
-
-## Debugging Stuck Investigations
-
-When an investigation seems stuck, use these commands to diagnose:
-
-```bash
-# 1. Full system health — now checks worker env vars and log errors
-reposwarm doctor
-
-# 2. Errors + stall detection — flags activities that never started
-reposwarm errors
-
-# 3. Activity-level status — which step is running/stuck?
-reposwarm wf status <workflow-id> -v
-
-# 4. View full Temporal event history
-reposwarm wf history <workflow-id> --filter Activity
-
-# 5. Tail worker logs (local mode)
-reposwarm logs worker -f
-
-# 6. Fix the issue, then retry the stuck workflow
-reposwarm wf retry <workflow-id>
-```
-
-### What `doctor` checks (local mode):
-- Config, API, Temporal, DynamoDB, Worker connectivity
-- **Worker environment**: ANTHROPIC_API_KEY, GITHUB_TOKEN, AWS credentials
-- **Worker logs**: scans last 20 lines for errors/tracebacks
-- Local tools (Git, Docker, Node, Python, AWS CLI), network
-
-### What `errors` detects:
-- Activity failures, timeouts, workflow failures
-- **Stalled activities**: scheduled but never started (worker can't pick up tasks)
-- **Zero-progress workflows**: running > 30 min with no completed steps
-
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `REPOSWARM_API_URL` | API server URL |
-| `REPOSWARM_API_TOKEN` | Bearer token |
+| `REPOSWARM_API_URL` | Override API URL |
+| `REPOSWARM_API_TOKEN` | Override bearer token |
 
-## Agent Usage
+## Configurable Keys
 
-Every command supports `--json`:
+Set via `reposwarm config set <key> <value>`:
 
-```bash
-reposwarm repos list --json | jq '.[].name'
-reposwarm results read my-repo --json | jq '.content'
-reposwarm doctor --json | jq '.checks[] | select(.status=="fail")'
-```
+| Key | Default | Description |
+|-----|---------|-------------|
+| `apiUrl` | `http://localhost:3000/v1` | API server URL |
+| `apiToken` | — | Bearer token |
+| `region` | `us-east-1` | AWS region |
+| `defaultModel` | `us.anthropic.claude-sonnet-4-6` | Default LLM model |
+| `chunkSize` | `10` | Files per investigation chunk |
+| `installDir` | `~/reposwarm` | Local installation directory |
+| `temporalPort` | `7233` | Temporal gRPC port |
+| `temporalUiPort` | `8233` | Temporal UI port |
+| `apiPort` | `3000` | API server port |
+| `uiPort` | `3001` | Web UI port |
+| `hubUrl` | — | Project hub URL |
 
 ## Development
 
@@ -255,10 +407,7 @@ go vet ./...               # Lint
 go build ./cmd/reposwarm   # Build
 ```
 
-## CI/CD
-
-CodePipeline (`reposwarm-cli-pipeline`):
-GitHub push → CodeBuild (Go 1.24, ARM64) → Tests → Cross-compile 4 targets → GitHub Release
+CI: GitHub push → Go 1.24 tests → Cross-compile (darwin/linux × arm64/amd64) → GitHub Release
 
 ## License
 
