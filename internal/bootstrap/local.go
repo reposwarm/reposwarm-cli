@@ -250,6 +250,7 @@ TEMPORAL_TASK_QUEUE=investigate-task-queue
 AWS_REGION=%s
 DYNAMODB_TABLE=%s
 API_BEARER_TOKEN=%s
+DYNAMODB_ENDPOINT=http://localhost:8000
 `, cfg.APIPort, cfg.TemporalPort, cfg.Region, cfg.DynamoDBTable, token)
 
 	if err := os.WriteFile(filepath.Join(apiDir, ".env"), []byte(envContent), 0600); err != nil {
@@ -278,6 +279,7 @@ API_BEARER_TOKEN=%s
 		"TEMPORAL_TASK_QUEUE=investigate-task-queue",
 		fmt.Sprintf("AWS_REGION=%s", cfg.Region),
 		fmt.Sprintf("DYNAMODB_TABLE=%s", cfg.DynamoDBTable),
+		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("API_BEARER_TOKEN=%s", token),
 	)
 	if err := startCmd.Start(); err != nil {
@@ -482,6 +484,7 @@ func verifyServices(cfg *Config, printer Printer) LocalStepResult {
 		url  string
 	}{
 		{"Temporal", fmt.Sprintf("http://localhost:%s/api/v1/namespaces", cfg.TemporalUIPort)},
+		{"DynamoDB Local", "http://localhost:8000"},
 		{"API", fmt.Sprintf("http://localhost:%s/v1/health", cfg.APIPort)},
 		{"UI", fmt.Sprintf("http://localhost:%s", cfg.UIPort)},
 	}
@@ -558,8 +561,17 @@ func TemporalComposeLocal() string {
     depends_on:
       - temporal
 
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb"]
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+
 volumes:
   temporal-data:
+  dynamodb-data:
 `
 }
 
