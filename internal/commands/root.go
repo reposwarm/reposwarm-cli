@@ -84,6 +84,8 @@ Get started:
 	root.AddCommand(newErrorsCmd())
 	root.AddCommand(newInvestigateCmd())
 	root.AddCommand(newLogsCmd())
+	root.AddCommand(newWorkersCmd())
+	root.AddCommand(newPreflightCmd())
 
 	// Results (includes diff, report as subcommands; show→sections)
 	root.AddCommand(newResultsCmd())
