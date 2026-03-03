@@ -24,13 +24,17 @@ func newConfigProviderCmd() *cobra.Command {
 
 func newProviderSetupCmd() *cobra.Command {
 	var (
-		providerFlag string
-		regionFlag   string
-		modelFlag    string
-		proxyURLFlag string
-		proxyKeyFlag string
-		pinFlag      bool
-		nonInterFlag bool
+		providerFlag   string
+		regionFlag     string
+		modelFlag      string
+		proxyURLFlag   string
+		proxyKeyFlag   string
+		pinFlag        bool
+		nonInterFlag   bool
+		authMethodFlag string
+		awsProfileFlag string
+		awsKeyFlag     string
+		awsSecretFlag  string
 	)
 
 	cmd := &cobra.Command{
@@ -62,6 +66,10 @@ Examples:
 			proxyURL := proxyURLFlag
 			proxyKey := proxyKeyFlag
 			pin := pinFlag
+			authMethod := authMethodFlag
+			awsProfile := awsProfileFlag
+			awsKey := awsKeyFlag
+			awsSecret := awsSecretFlag
 
 			if !nonInterFlag && provider == "" {
 				// Interactive mode
@@ -87,6 +95,38 @@ Examples:
 					if region == "" {
 						region = promptString(reader, "AWS Region", "us-east-1")
 					}
+
+					// Ask for auth method
+					if authMethod == "" {
+						fmt.Println()
+						fmt.Println("  How does the worker authenticate with AWS?")
+						fmt.Println()
+						fmt.Println("  1) iam-role       — EC2 instance profile or ECS task role (recommended)")
+						fmt.Println("  2) long-term-keys — AWS access key + secret")
+						fmt.Println("  3) profile        — Named AWS profile (~/.aws/credentials or SSO)")
+						fmt.Println()
+
+						authMethod = promptChoice(reader, "Auth method [1/2/3]", map[string]string{
+							"1": "iam-role", "2": "long-term-keys", "3": "profile",
+							"iam-role": "iam-role", "long-term-keys": "long-term-keys", "profile": "profile",
+						}, "iam-role")
+					}
+
+					// Prompt for auth-specific info
+					switch config.BedrockAuthMethod(authMethod) {
+					case config.BedrockAuthLongTermKeys:
+						if awsKey == "" {
+							awsKey = promptString(reader, "AWS Access Key ID", "")
+						}
+						if awsSecret == "" {
+							awsSecret = promptString(reader, "AWS Secret Access Key", "")
+						}
+					case config.BedrockAuthProfile, config.BedrockAuthSSO:
+						if awsProfile == "" {
+							awsProfile = promptString(reader, "AWS Profile name", "default")
+						}
+					}
+
 				case config.ProviderLiteLLM:
 					if proxyURL == "" {
 						proxyURL = promptString(reader, "LiteLLM proxy URL", "http://localhost:4000")
@@ -126,6 +166,19 @@ Examples:
 					region = "us-east-1"
 				}
 				cfg.ProviderConfig.AWSRegion = region
+
+				// Set auth method
+				if authMethod == "" {
+					authMethod = "iam-role" // default
+				}
+				cfg.ProviderConfig.BedrockAuth = config.BedrockAuthMethod(authMethod)
+
+				// Set profile if using profile auth
+				if config.BedrockAuthMethod(authMethod) == config.BedrockAuthProfile ||
+				   config.BedrockAuthMethod(authMethod) == config.BedrockAuthSSO {
+					cfg.ProviderConfig.AWSProfile = awsProfile
+				}
+
 			case config.ProviderLiteLLM:
 				cfg.ProviderConfig.ProxyURL = proxyURL
 				cfg.ProviderConfig.ProxyKey = proxyKey
@@ -161,6 +214,18 @@ Examples:
 
 			// Push env vars to worker via API
 			workerVars := config.WorkerEnvVars(&cfg.ProviderConfig, model)
+
+			// Add AWS credentials for long-term-keys auth
+			if config.Provider(provider) == config.ProviderBedrock &&
+			   config.BedrockAuthMethod(authMethod) == config.BedrockAuthLongTermKeys {
+				if awsKey != "" {
+					workerVars["AWS_ACCESS_KEY_ID"] = awsKey
+				}
+				if awsSecret != "" {
+					workerVars["AWS_SECRET_ACCESS_KEY"] = awsSecret
+				}
+			}
+
 			client, clientErr := getClient()
 			if clientErr == nil {
 				for k, v := range workerVars {
@@ -169,6 +234,47 @@ Examples:
 					if err := client.Put(ctx(), "/workers/worker-1/env/"+k, body, &resp); err != nil {
 						if !flagJSON {
 							output.F.Warning(fmt.Sprintf("Could not set worker env %s: %v", k, err))
+						}
+					}
+				}
+
+				// Run inference health check
+				if !flagJSON {
+					fmt.Println()
+					output.F.Section("Inference Health Check")
+					fmt.Print("  Testing model connection... ")
+				}
+
+				var inferenceResp struct {
+					Success     bool   `json:"success"`
+					Provider    string `json:"provider"`
+					Model       string `json:"model"`
+					AuthMethod  string `json:"authMethod"`
+					LatencyMs   int    `json:"latencyMs"`
+					Response    string `json:"response"`
+					Error       string `json:"error"`
+					Hint        string `json:"hint"`
+				}
+
+				// POST to /workers/worker-1/inference-check
+				if err := client.Post(ctx(), "/workers/worker-1/inference-check", nil, &inferenceResp); err != nil {
+					if !flagJSON {
+						output.F.Println()
+						output.F.Warning(fmt.Sprintf("Could not run inference check: %v", err))
+					}
+				} else {
+					if flagJSON {
+						// Include in JSON output
+						workerVars["inferenceCheck"] = fmt.Sprintf("%v", inferenceResp.Success)
+					} else {
+						if inferenceResp.Success {
+							output.Successf("✓ inference working (%dms)", inferenceResp.LatencyMs)
+						} else {
+							output.F.Println()
+							output.F.Error(fmt.Sprintf("✗ inference failed: %s", inferenceResp.Error))
+							if inferenceResp.Hint != "" {
+								output.F.Info(fmt.Sprintf("Hint: %s", inferenceResp.Hint))
+							}
 						}
 					}
 				}
@@ -221,10 +327,16 @@ Examples:
 	cmd.Flags().StringVar(&proxyKeyFlag, "proxy-key", "", "LiteLLM proxy API key")
 	cmd.Flags().BoolVar(&pinFlag, "pin", false, "Pin model versions")
 	cmd.Flags().BoolVar(&nonInterFlag, "non-interactive", false, "Skip prompts")
+	cmd.Flags().StringVar(&authMethodFlag, "auth-method", "", "Bedrock auth method (iam-role|long-term-keys|profile)")
+	cmd.Flags().StringVar(&awsProfileFlag, "aws-profile", "", "AWS profile name (for profile auth)")
+	cmd.Flags().StringVar(&awsKeyFlag, "aws-key", "", "AWS access key ID (for long-term-keys auth)")
+	cmd.Flags().StringVar(&awsSecretFlag, "aws-secret", "", "AWS secret access key (for long-term-keys auth)")
 	return cmd
 }
 
 func newProviderSetCmd() *cobra.Command {
+	var checkFlag bool
+
 	cmd := &cobra.Command{
 		Use:   "set <provider>",
 		Short: "Quick-switch provider (preserves other settings)",
@@ -273,22 +385,71 @@ func newProviderSetCmd() *cobra.Command {
 					var resp any
 					client.Put(ctx(), "/workers/worker-1/env/"+k, body, &resp)
 				}
+
+				// Run inference check if requested
+				if checkFlag {
+					if !flagJSON {
+						fmt.Println()
+						output.F.Section("Inference Health Check")
+						fmt.Print("  Testing model connection... ")
+					}
+
+					var inferenceResp struct {
+						Success     bool   `json:"success"`
+						Provider    string `json:"provider"`
+						Model       string `json:"model"`
+						AuthMethod  string `json:"authMethod"`
+						LatencyMs   int    `json:"latencyMs"`
+						Response    string `json:"response"`
+						Error       string `json:"error"`
+						Hint        string `json:"hint"`
+					}
+
+					if err := client.Post(ctx(), "/workers/worker-1/inference-check", nil, &inferenceResp); err != nil {
+						if !flagJSON {
+							output.F.Println()
+							output.F.Warning(fmt.Sprintf("Could not run inference check: %v", err))
+						}
+					} else {
+						if flagJSON {
+							return output.JSON(map[string]any{
+								"provider":       provider,
+								"model":          cfg.DefaultModel,
+								"inferenceCheck": inferenceResp.Success,
+								"latencyMs":      inferenceResp.LatencyMs,
+							})
+						} else {
+							if inferenceResp.Success {
+								output.Successf("✓ inference working (%dms)", inferenceResp.LatencyMs)
+							} else {
+								output.F.Println()
+								output.F.Error(fmt.Sprintf("✗ inference failed: %s", inferenceResp.Error))
+								if inferenceResp.Hint != "" {
+									output.F.Info(fmt.Sprintf("Hint: %s", inferenceResp.Hint))
+								}
+							}
+						}
+					}
+				}
 			}
 
-			if flagJSON {
+			if flagJSON && !checkFlag {
 				return output.JSON(map[string]any{
 					"provider": provider,
 					"model":    cfg.DefaultModel,
 				})
 			}
 
-			output.Successf("Switched to %s (model: %s)", provider, cfg.DefaultModel)
-			if clientErr == nil {
-				output.F.Warning("Restart worker to apply: reposwarm restart worker")
+			if !flagJSON {
+				output.Successf("Switched to %s (model: %s)", provider, cfg.DefaultModel)
+				if clientErr == nil {
+					output.F.Warning("Restart worker to apply: reposwarm restart worker")
+				}
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&checkFlag, "check", false, "Run inference health check after switching")
 	return cmd
 }
 
@@ -350,11 +511,24 @@ func newProviderShowCmd() *cobra.Command {
 			F := output.F
 			F.Section("Provider Configuration")
 			F.KeyValue("Provider", string(provider))
+
+			// Show auth method for Bedrock
+			if provider == config.ProviderBedrock {
+				authMethod := pc.BedrockAuth
+				if authMethod == "" {
+					authMethod = config.BedrockAuthIAMRole // default
+				}
+				F.KeyValue("Auth Method", string(authMethod))
+			}
+
 			F.KeyValue("Model", model)
 
 			switch provider {
 			case config.ProviderBedrock:
 				F.KeyValue("AWS Region", orDefault(pc.AWSRegion, "us-east-1"))
+				if pc.BedrockAuth == config.BedrockAuthProfile || pc.BedrockAuth == config.BedrockAuthSSO {
+					F.KeyValue("AWS Profile", orDefault(pc.AWSProfile, "(not set)"))
+				}
 			case config.ProviderLiteLLM:
 				F.KeyValue("Proxy URL", orDefault(pc.ProxyURL, "(not set)"))
 				if pc.ProxyKey != "" {
@@ -379,6 +553,92 @@ func newProviderShowCmd() *cobra.Command {
 				F.Println()
 				F.Warning(fmt.Sprintf("⚠ Config drift: CLI says '%s' but worker is running '%s'", provider, workerProvider))
 				F.Info("Run: reposwarm restart worker")
+			}
+
+			// Environment validation
+			if clientErr == nil {
+				var envResp struct {
+					Entries []struct {
+						Key   string `json:"key"`
+						Value string `json:"value"`
+						Set   bool   `json:"set"`
+					} `json:"entries"`
+				}
+				if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
+					// Build current env map
+					currentEnv := make(map[string]string)
+					for _, e := range envResp.Entries {
+						if e.Set {
+							currentEnv[e.Key] = e.Value
+						}
+					}
+
+					// Validate environment
+					validation := config.ValidateWorkerEnv(&pc, currentEnv)
+
+					F.Println()
+					F.Section("Environment Validation")
+
+					// Show required env vars and their status
+					reqs := config.RequiredEnvVars(&pc)
+					for _, req := range reqs {
+						if !req.Required {
+							continue // Skip optional vars in display
+						}
+
+						val, hasKey := currentEnv[req.Key]
+						// Check alternatives
+						if !hasKey || val == "" {
+							for _, alt := range req.Alts {
+								if altVal, hasAlt := currentEnv[alt]; hasAlt && altVal != "" {
+									hasKey = true
+									val = altVal
+									break
+								}
+							}
+						}
+
+						if hasKey && val != "" {
+							// For sensitive values, mask them
+							displayVal := val
+							if strings.Contains(req.Key, "KEY") || strings.Contains(req.Key, "SECRET") || strings.Contains(req.Key, "TOKEN") {
+								displayVal = config.MaskedToken(val)
+							}
+							// Special handling for CLAUDE_CODE_USE_BEDROCK
+							if req.Key == "CLAUDE_CODE_USE_BEDROCK" {
+								F.KeyValue(fmt.Sprintf("✓ %s", req.Key), displayVal)
+							} else if req.Key == "AWS_REGION" || req.Key == "ANTHROPIC_MODEL" {
+								F.KeyValue(fmt.Sprintf("✓ %s", req.Key), displayVal)
+							} else {
+								F.KeyValue(fmt.Sprintf("✓ %s", req.Key), displayVal)
+							}
+						} else {
+							F.KeyValue(fmt.Sprintf("✗ %s", req.Key), fmt.Sprintf("NOT SET — %s", req.Desc))
+						}
+					}
+
+					// Special case for IAM role auth - show inherited message
+					if pc.Provider == config.ProviderBedrock &&
+					   (pc.BedrockAuth == config.BedrockAuthIAMRole || pc.BedrockAuth == "") {
+						// Check if we're NOT using long-term keys
+						_, hasAccessKey := currentEnv["AWS_ACCESS_KEY_ID"]
+						_, hasSecretKey := currentEnv["AWS_SECRET_ACCESS_KEY"]
+						if !hasAccessKey && !hasSecretKey {
+							F.KeyValue("✓ AWS credentials", "inherited (IAM role)")
+						}
+					}
+
+					// Show warnings
+					for _, warning := range validation.Warnings {
+						F.Warning(warning)
+					}
+
+					// Overall status
+					if !validation.Valid {
+						F.Println()
+						F.Error("Environment validation failed. Run 'reposwarm config provider setup' to fix.")
+					}
+				}
 			}
 
 			return nil

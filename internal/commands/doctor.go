@@ -66,6 +66,9 @@ func newDoctorCmd() *cobra.Command {
 			// 8. Stalled workflows
 			checks = append(checks, checkStalledWorkflows()...)
 
+			// 9. Provider credentials and inference check
+			checks = append(checks, checkProviderCredentials()...)
+
 			if flagJSON {
 				summary := map[string]any{
 					"checks": checks,
@@ -485,4 +488,192 @@ func countStatus(checks []checkResult, status string) int {
 		}
 	}
 	return n
+}
+
+func checkProviderCredentials() []checkResult {
+	var results []checkResult
+
+	cfg, err := config.Load()
+	if err != nil {
+		return results
+	}
+
+	client, err := getClient()
+	if err != nil {
+		return results
+	}
+
+	if !flagJSON {
+		output.F.Println()
+		output.F.Section("Provider Credentials")
+	}
+
+	// Get current provider config
+	provider := cfg.EffectiveProvider()
+	pc := cfg.ProviderConfig
+
+	// Fetch worker env for validation
+	var envResp struct {
+		Entries []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+			Set   bool   `json:"set"`
+		} `json:"entries"`
+	}
+
+	currentEnv := make(map[string]string)
+	if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
+		for _, e := range envResp.Entries {
+			if e.Set {
+				currentEnv[e.Key] = e.Value
+			}
+		}
+	}
+
+	// Validate environment
+	validation := config.ValidateWorkerEnv(&pc, currentEnv)
+
+	// Provider-specific credential checks
+	switch provider {
+	case config.ProviderAnthropic:
+		if apiKey, ok := currentEnv["ANTHROPIC_API_KEY"]; ok && apiKey != "" {
+			c := checkResult{"Anthropic API key", "ok", "set"}
+			printCheck(c)
+			results = append(results, c)
+		} else {
+			c := checkResult{"Anthropic API key", "fail", "NOT SET"}
+			printCheck(c)
+			results = append(results, c)
+		}
+
+	case config.ProviderBedrock:
+		// Check AWS credentials based on auth method
+		authMethod := pc.BedrockAuth
+		if authMethod == "" {
+			authMethod = config.BedrockAuthIAMRole
+		}
+
+		switch authMethod {
+		case config.BedrockAuthLongTermKeys:
+			hasKey := currentEnv["AWS_ACCESS_KEY_ID"] != ""
+			hasSecret := currentEnv["AWS_SECRET_ACCESS_KEY"] != ""
+			if hasKey && hasSecret {
+				c := checkResult{"AWS credentials", "ok", "long-term keys set"}
+				printCheck(c)
+				results = append(results, c)
+			} else {
+				c := checkResult{"AWS credentials", "fail", "long-term keys NOT SET"}
+				printCheck(c)
+				results = append(results, c)
+			}
+
+		case config.BedrockAuthProfile, config.BedrockAuthSSO:
+			if profile, ok := currentEnv["AWS_PROFILE"]; ok && profile != "" {
+				c := checkResult{"AWS profile", "ok", profile}
+				printCheck(c)
+				results = append(results, c)
+			} else {
+				c := checkResult{"AWS profile", "fail", "NOT SET"}
+				printCheck(c)
+				results = append(results, c)
+			}
+
+		case config.BedrockAuthIAMRole:
+			c := checkResult{"AWS credentials", "ok", "using IAM role"}
+			printCheck(c)
+			results = append(results, c)
+		}
+
+		// Check region
+		if region, ok := currentEnv["AWS_REGION"]; ok && region != "" {
+			c := checkResult{"AWS region", "ok", region}
+			printCheck(c)
+			results = append(results, c)
+		} else {
+			c := checkResult{"AWS region", "warn", "not set (will use default)"}
+			printCheck(c)
+			results = append(results, c)
+		}
+
+	case config.ProviderLiteLLM:
+		if proxyURL, ok := currentEnv["ANTHROPIC_BASE_URL"]; ok && proxyURL != "" {
+			c := checkResult{"LiteLLM proxy URL", "ok", proxyURL}
+			printCheck(c)
+			results = append(results, c)
+		} else {
+			c := checkResult{"LiteLLM proxy URL", "fail", "NOT SET"}
+			printCheck(c)
+			results = append(results, c)
+		}
+	}
+
+	// Run inference health check
+	if !flagJSON {
+		fmt.Print("  Inference check: ")
+	}
+
+	var inferenceResp struct {
+		Success     bool   `json:"success"`
+		Provider    string `json:"provider"`
+		Model       string `json:"model"`
+		AuthMethod  string `json:"authMethod"`
+		LatencyMs   int    `json:"latencyMs"`
+		Response    string `json:"response"`
+		Error       string `json:"error"`
+		Hint        string `json:"hint"`
+	}
+
+	if err := client.Post(ctx(), "/workers/worker-1/inference-check", nil, &inferenceResp); err != nil {
+		// API endpoint might not exist yet
+		c := checkResult{"Inference check", "warn", "endpoint not available"}
+		if !flagJSON {
+			fmt.Println("endpoint not available")
+		}
+		results = append(results, c)
+	} else {
+		if inferenceResp.Success {
+			c := checkResult{"Inference check", "ok", fmt.Sprintf("working (%dms)", inferenceResp.LatencyMs)}
+			if !flagJSON {
+				output.Successf("✓ working (%dms)", inferenceResp.LatencyMs)
+			}
+			results = append(results, c)
+		} else {
+			errorMsg := inferenceResp.Error
+			if inferenceResp.Hint != "" {
+				errorMsg += " — " + inferenceResp.Hint
+			}
+			c := checkResult{"Inference check", "fail", errorMsg}
+			if !flagJSON {
+				output.F.Error(fmt.Sprintf("✗ %s", errorMsg))
+			}
+			results = append(results, c)
+		}
+	}
+
+	// Overall validation status
+	if !validation.Valid && len(validation.Missing) > 0 {
+		for _, missing := range validation.Missing {
+			c := checkResult{
+				Name:    fmt.Sprintf("Required: %s", missing.Key),
+				Status:  "fail",
+				Message: fmt.Sprintf("NOT SET — %s", missing.Desc),
+			}
+			// Don't double-print if we already checked it above
+			if !containsCheckForKey(results, missing.Key) {
+				printCheck(c)
+				results = append(results, c)
+			}
+		}
+	}
+
+	return results
+}
+
+func containsCheckForKey(checks []checkResult, key string) bool {
+	for _, c := range checks {
+		if strings.Contains(c.Name, key) {
+			return true
+		}
+	}
+	return false
 }
