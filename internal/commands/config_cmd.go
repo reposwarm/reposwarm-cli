@@ -95,6 +95,9 @@ func newConfigShowCmd() *cobra.Command {
 					"chunkSize":    cfg.ChunkSize,
 					"outputFormat": cfg.OutputFormat,
 					"installDir":   cfg.EffectiveInstallDir(),
+					"provider":     cfg.ProviderConfig.Provider,
+					"authMethod":   cfg.ProviderConfig.BedrockAuth,
+					"gitProvider":  cfg.GitProvider,
 				}
 				// Try to include server config
 				client, clientErr := getClient()
@@ -119,6 +122,52 @@ func newConfigShowCmd() *cobra.Command {
 			F.KeyValue("chunkSize", fmt.Sprint(cfg.ChunkSize))
 			F.KeyValue("outputFormat", cfg.OutputFormat)
 			F.KeyValue("installDir", cfg.EffectiveInstallDir())
+			F.Println()
+
+			// Provider config
+			F.Section("LLM Provider")
+			provider := string(cfg.ProviderConfig.Provider)
+			if provider == "" {
+				provider = "(not configured)"
+			}
+			F.KeyValue("provider", provider)
+			if cfg.ProviderConfig.Provider == config.ProviderBedrock {
+				auth := string(cfg.ProviderConfig.BedrockAuth)
+				if auth == "" {
+					auth = "iam-role (default)"
+				}
+				F.KeyValue("authMethod", auth)
+				if cfg.ProviderConfig.AWSRegion != "" {
+					F.KeyValue("awsRegion", cfg.ProviderConfig.AWSRegion)
+				}
+			}
+			if cfg.ProviderConfig.Provider == config.ProviderLiteLLM {
+				if cfg.ProviderConfig.ProxyURL != "" {
+					F.KeyValue("proxyUrl", cfg.ProviderConfig.ProxyURL)
+				}
+			}
+			if cfg.DefaultModel != "" {
+				F.KeyValue("model", cfg.DefaultModel)
+			}
+			if cfg.ProviderConfig.SmallModel != "" {
+				F.KeyValue("smallModel", cfg.ProviderConfig.SmallModel)
+			}
+			F.Println()
+
+			// Git provider config
+			F.Section("Git Provider")
+			gitProvider := cfg.GitProvider
+			if gitProvider == "" {
+				F.KeyValue("provider", "(not configured)")
+				F.Info("Run: reposwarm config git setup")
+			} else {
+				b, _ := config.GetGitProviderBundle(gitProvider)
+				label := gitProvider
+				if b != nil {
+					label = fmt.Sprintf("%s (%s)", b.Label, gitProvider)
+				}
+				F.KeyValue("provider", label)
+			}
 			F.Println()
 
 			// Show server-side config if API is reachable
