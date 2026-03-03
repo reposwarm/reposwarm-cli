@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/loki-bedlam/reposwarm-cli/internal/config"
 	"github.com/loki-bedlam/reposwarm-cli/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -18,90 +20,186 @@ func newUpgradeCmd(currentVersion string) *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:     "upgrade",
+		Use:     "upgrade [component]",
 		Aliases: []string{"update"},
-		Short:   "Upgrade reposwarm CLI to the latest version",
-		Long: `Downloads and installs the latest version from GitHub releases.
+		Short:   "Upgrade RepoSwarm components (cli, api, ui, all)",
+		Long: `Upgrade RepoSwarm components to their latest versions.
+
+Components:
+  cli  (default)  Upgrade the CLI binary from GitHub releases
+  api             Pull latest API server code and restart
+  ui              Pull latest UI code and restart
+  all             Upgrade CLI + API + UI
 
 Examples:
-  reposwarm upgrade           # Upgrade if newer version available
+  reposwarm upgrade           # Upgrade CLI only
+  reposwarm upgrade cli       # Same as above
+  reposwarm upgrade api       # Pull latest API + restart
+  reposwarm upgrade ui        # Pull latest UI + restart
+  reposwarm upgrade all       # Upgrade everything
   reposwarm upgrade --force   # Reinstall even if same version`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !flagJSON {
-				output.F.Section("RepoSwarm CLI Upgrade")
-				fmt.Printf("  Current version: %s\n", output.Cyan("v"+currentVersion))
+			component := "cli"
+			if len(args) > 0 {
+				component = args[0]
 			}
 
-			latestVer, downloadURL, err := getLatestRelease()
-			if err != nil {
-				return fmt.Errorf("checking for updates: %w", err)
-			}
-
-			if flagJSON {
-				return output.JSON(map[string]any{
-					"current":     currentVersion,
-					"latest":      latestVer,
-					"updateAvail": latestVer != currentVersion,
-					"downloadUrl": downloadURL,
-				})
-			}
-
-			fmt.Printf("  Latest version:  %s\n", output.Cyan("v"+latestVer))
-
-			if latestVer == currentVersion && !force {
-				fmt.Printf("\n  %s\n\n", output.Green("Already up to date!"))
-				return nil
-			}
-
-			if latestVer == currentVersion && force {
-				output.Infof("Reinstalling v%s (--force)", currentVersion)
-			} else {
-				output.Infof("Upgrading v%s → v%s", currentVersion, latestVer)
-			}
-
-			fmt.Printf("  Downloading...")
-			tmpFile, err := downloadBinary(downloadURL)
-			if err != nil {
-				return fmt.Errorf("download failed: %w", err)
-			}
-			defer os.Remove(tmpFile)
-			fmt.Printf(" done\n")
-
-			binPath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("finding current binary: %w", err)
-			}
-			// Resolve symlinks
-			binPath, err = filepath.EvalSymlinks(binPath)
-			if err != nil {
-				return fmt.Errorf("resolving binary path: %w", err)
-			}
-
-			fmt.Printf("  Installing to %s...", binPath)
-			if err := safeReplaceBinary(tmpFile, binPath); err != nil {
-				return fmt.Errorf("install failed: %w", err)
-			}
-			fmt.Printf(" done\n\n")
-
-			output.F.Success(fmt.Sprintf("reposwarm v%s installed — restart your shell or run 'reposwarm version' to verify", latestVer))
-
-			// Show what changed since the old version
-			changes, err := getChangelog(currentVersion, latestVer)
-			if err == nil && len(changes) > 0 {
-				fmt.Println()
-				output.F.Section("What's New")
-				for _, line := range changes {
-					fmt.Printf("  %s\n", line)
+			switch component {
+			case "cli", "":
+				return upgradeCLI(currentVersion, force)
+			case "api":
+				return upgradeService("api", force)
+			case "ui":
+				return upgradeService("ui", force)
+			case "all":
+				if err := upgradeCLI(currentVersion, force); err != nil {
+					output.F.Warning(fmt.Sprintf("CLI upgrade failed: %v", err))
 				}
-				fmt.Println()
+				if err := upgradeService("api", force); err != nil {
+					output.F.Warning(fmt.Sprintf("API upgrade failed: %v", err))
+				}
+				if err := upgradeService("ui", force); err != nil {
+					output.F.Warning(fmt.Sprintf("UI upgrade failed: %v", err))
+				}
+				return nil
+			default:
+				return fmt.Errorf("unknown component: %s (use: cli, api, ui, all)", component)
 			}
-
-			return nil
 		},
+		ValidArgs: []string{"cli", "api", "ui", "all"},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Reinstall even if same version")
 	return cmd
+}
+
+func upgradeCLI(currentVersion string, force bool) error {
+	if !flagJSON {
+		output.F.Section("RepoSwarm CLI Upgrade")
+		fmt.Printf("  Current version: %s\n", output.Cyan("v"+currentVersion))
+	}
+
+	latestVer, downloadURL, err := getLatestRelease()
+	if err != nil {
+		return fmt.Errorf("checking for updates: %w", err)
+	}
+
+	if flagJSON {
+		return output.JSON(map[string]any{
+			"current":     currentVersion,
+			"latest":      latestVer,
+			"updateAvail": latestVer != currentVersion,
+			"downloadUrl": downloadURL,
+		})
+	}
+
+	fmt.Printf("  Latest version:  %s\n", output.Cyan("v"+latestVer))
+
+	if latestVer == currentVersion && !force {
+		fmt.Printf("\n  %s\n\n", output.Green("Already up to date!"))
+		return nil
+	}
+
+	if latestVer == currentVersion && force {
+		output.Infof("Reinstalling v%s (--force)", currentVersion)
+	} else {
+		output.Infof("Upgrading v%s → v%s", currentVersion, latestVer)
+	}
+
+	fmt.Printf("  Downloading...")
+	tmpFile, err := downloadBinary(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer os.Remove(tmpFile)
+	fmt.Printf(" done\n")
+
+	binPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding current binary: %w", err)
+	}
+	binPath, err = filepath.EvalSymlinks(binPath)
+	if err != nil {
+		return fmt.Errorf("resolving binary path: %w", err)
+	}
+
+	fmt.Printf("  Installing to %s...", binPath)
+	if err := safeReplaceBinary(tmpFile, binPath); err != nil {
+		return fmt.Errorf("install failed: %w", err)
+	}
+	fmt.Printf(" done\n\n")
+
+	output.F.Success(fmt.Sprintf("reposwarm v%s installed — restart your shell or run 'reposwarm version' to verify", latestVer))
+
+	changes, err := getChangelog(currentVersion, latestVer)
+	if err == nil && len(changes) > 0 {
+		fmt.Println()
+		output.F.Section("What's New")
+		for _, line := range changes {
+			fmt.Printf("  %s\n", line)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+// upgradeService pulls latest code for api/ui and restarts.
+func upgradeService(svc string, force bool) error {
+	if !flagJSON {
+		output.F.Section(fmt.Sprintf("Upgrading %s", strings.ToUpper(svc)))
+	}
+
+	client, err := getClient()
+	if err != nil {
+		return fmt.Errorf("connecting to API: %w", err)
+	}
+
+	// Call POST /services/:name/upgrade (API implements git pull + restart)
+	var resp struct {
+		OldVersion string `json:"oldVersion"`
+		NewVersion string `json:"newVersion"`
+		Updated    bool   `json:"updated"`
+		Restarted  bool   `json:"restarted"`
+		Message    string `json:"message"`
+	}
+
+	if err := client.Post(ctx(), fmt.Sprintf("/services/%s/upgrade", svc), map[string]bool{"force": force}, &resp); err != nil {
+		// If the API doesn't have the upgrade endpoint yet, fall back to manual steps
+		if !flagJSON {
+			output.F.Warning(fmt.Sprintf("API server doesn't support /services/%s/upgrade yet", svc))
+			output.F.Info("Upgrade manually:")
+			fmt.Println()
+			cfg, cfgErr := config.Load()
+			installDir := "/opt/reposwarm"
+			if cfgErr == nil && cfg.InstallDir != "" {
+				installDir = cfg.InstallDir
+			}
+			fmt.Printf("  cd %s/%s && git pull && npm install && npm run build\n", installDir, svc)
+			fmt.Printf("  reposwarm restart %s\n\n", svc)
+		}
+		return err
+	}
+
+	if flagJSON {
+		return output.JSON(resp)
+	}
+
+	if resp.Updated {
+		if resp.OldVersion != "" && resp.NewVersion != "" {
+			output.Successf("%s upgraded: v%s → v%s", strings.ToUpper(svc), resp.OldVersion, resp.NewVersion)
+		} else {
+			output.Successf("%s upgraded to latest", strings.ToUpper(svc))
+		}
+	} else {
+		output.Successf("%s already up to date", strings.ToUpper(svc))
+	}
+
+	if resp.Restarted {
+		output.Successf("%s restarted", strings.ToUpper(svc))
+	}
+
+	return nil
 }
 
 type ghRelease struct {

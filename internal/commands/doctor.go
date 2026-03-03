@@ -24,17 +24,23 @@ type checkResult struct {
 }
 
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	var fixMode bool
+
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose RepoSwarm installation health",
 		Long: `Runs a series of checks to verify your RepoSwarm setup is working:
   - CLI configuration (API URL, token)
   - API server connectivity and health
+  - Version compatibility (CLI ↔ API ↔ UI)
   - Temporal server connectivity
   - DynamoDB connectivity
   - Worker status
   - Local dependencies (Docker, Node, Python, Git)
-  - Network connectivity`,
+  - Network connectivity
+  - Provider credentials
+
+Use --fix to attempt automatic fixes for failed checks.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var checks []checkResult
 
@@ -87,9 +93,23 @@ func newDoctorCmd() *cobra.Command {
 			warn := countStatus(checks, "warn")
 			fail := countStatus(checks, "fail")
 			output.F.CheckSummary(ok, warn, fail)
+
+			// --fix mode: attempt to fix failed checks
+			if fixMode && fail > 0 {
+				fmt.Println()
+				output.F.Section("Auto-Fix")
+				runAutoFixes(checks)
+			} else if fail > 0 && !fixMode {
+				fmt.Println()
+				output.F.Info("Run with --fix to attempt automatic fixes")
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&fixMode, "fix", false, "Attempt automatic fixes for failed checks")
+	return cmd
 }
 
 func printCheck(c checkResult) {
@@ -97,6 +117,68 @@ func printCheck(c checkResult) {
 		return
 	}
 	output.F.CheckResult(c.Name, c.Status, c.Message)
+}
+
+// fixAction maps check names to auto-fix actions.
+type fixAction struct {
+	Name    string
+	Fix     func() error
+	Desc    string
+}
+
+func runAutoFixes(checks []checkResult) {
+	fixes := map[string]fixAction{
+		"API Server version": {
+			Name: "Upgrade API server",
+			Desc: "reposwarm upgrade api",
+			Fix: func() error {
+				return upgradeService("api", false)
+			},
+		},
+		"UI version": {
+			Name: "Upgrade UI",
+			Desc: "reposwarm upgrade ui",
+			Fix: func() error {
+				return upgradeService("ui", false)
+			},
+		},
+	}
+
+	fixedCount := 0
+	for _, c := range checks {
+		if c.Status != "fail" {
+			continue
+		}
+		if fa, ok := fixes[c.Name]; ok {
+			fmt.Printf("  Fixing: %s (%s)... ", c.Name, fa.Desc)
+			if err := fa.Fix(); err != nil {
+				output.F.Error(fmt.Sprintf("failed: %v", err))
+			} else {
+				output.Successf("done")
+				fixedCount++
+			}
+		} else {
+			// No auto-fix, show manual instructions
+			output.F.Info(fmt.Sprintf("  %s — no auto-fix available. Fix manually:", c.Name))
+			switch {
+			case strings.Contains(c.Name, "Worker"):
+				output.F.Info("    reposwarm restart worker")
+			case strings.Contains(c.Name, "Provider") || strings.Contains(c.Name, "Inference"):
+				output.F.Info("    reposwarm config provider setup")
+			case strings.Contains(c.Name, "Docker"):
+				output.F.Info("    Install Docker: https://docs.docker.com/get-docker/")
+			case strings.Contains(c.Name, "Temporal"):
+				output.F.Info("    reposwarm restart temporal")
+			default:
+				output.F.Info("    Check the error message above for guidance")
+			}
+		}
+	}
+
+	if fixedCount > 0 {
+		fmt.Println()
+		output.Successf("%d fix(es) applied — re-run 'reposwarm doctor' to verify", fixedCount)
+	}
 }
 
 func checkVersionCompat() []checkResult {
@@ -137,7 +219,7 @@ func checkVersionCompat() []checkResult {
 			c := checkResult{
 				Name:    fmt.Sprintf("%s version", vc.Component),
 				Status:  "fail",
-				Message: fmt.Sprintf("v%s — needs v%s+ (upgrade %s)", vc.Actual, vc.Minimum, strings.ToLower(vc.Component)),
+				Message: fmt.Sprintf("v%s — needs v%s+ (run: reposwarm upgrade %s)", vc.Actual, vc.Minimum, strings.ToLower(vc.Component)),
 			}
 			printCheck(c)
 			results = append(results, c)
