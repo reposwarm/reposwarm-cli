@@ -23,7 +23,7 @@ type checkResult struct {
 	Message string `json:"message"`
 }
 
-func newDoctorCmd() *cobra.Command {
+func newDoctorCmd(currentVersion string) *cobra.Command {
 	var fixMode bool
 
 	cmd := &cobra.Command{
@@ -33,6 +33,7 @@ func newDoctorCmd() *cobra.Command {
   - CLI configuration (API URL, token)
   - API server connectivity and health
   - Version compatibility (CLI ↔ API ↔ UI)
+  - CLI update availability
   - Temporal server connectivity
   - DynamoDB connectivity
   - Worker status
@@ -56,6 +57,9 @@ Use --fix to attempt automatic fixes for failed checks.`,
 
 			// 2b. Version compatibility
 			checks = append(checks, checkVersionCompat()...)
+
+			// 2c. CLI update check
+			checks = append(checks, checkCLIUpdate(currentVersion)...)
 
 			// 3. Local tools
 			checks = append(checks, checkLocalTools()...)
@@ -94,14 +98,26 @@ Use --fix to attempt automatic fixes for failed checks.`,
 			fail := countStatus(checks, "fail")
 			output.F.CheckSummary(ok, warn, fail)
 
-			// --fix mode: attempt to fix failed checks
-			if fixMode && fail > 0 {
-				fmt.Println()
-				output.F.Section("Auto-Fix")
-				runAutoFixes(checks)
-			} else if fail > 0 && !fixMode {
-				fmt.Println()
-				output.F.Info("Run with --fix to attempt automatic fixes")
+			// Recommended actions section
+			if fail > 0 || warn > 0 {
+				actions := buildRecommendedActions(checks)
+				if len(actions) > 0 {
+					fmt.Println()
+					output.F.Section("Recommended Actions")
+					fmt.Println()
+					for i, a := range actions {
+						fmt.Printf("  %d. %s\n", i+1, a.desc)
+						fmt.Printf("     %s\n\n", output.Cyan(a.cmd))
+					}
+
+					if fixMode {
+						fmt.Println()
+						output.F.Section("Auto-Fix")
+						runAutoFixes(checks)
+					} else {
+						fmt.Printf("  Run all fixes: %s\n\n", output.Cyan("reposwarm doctor --fix"))
+					}
+				}
 			}
 
 			return nil
@@ -237,6 +253,103 @@ func checkVersionCompat() []checkResult {
 	}
 
 	return results
+}
+
+func checkCLIUpdate(currentVersion string) []checkResult {
+	var results []checkResult
+
+	if !flagJSON {
+		output.F.Println()
+		output.F.Section("CLI Updates")
+	}
+
+	latestVer, _, err := getLatestRelease()
+	if err != nil {
+		c := checkResult{Name: "CLI update", Status: "warn", Message: "could not check for updates"}
+		printCheck(c)
+		return append(results, c)
+	}
+
+	if latestVer == currentVersion {
+		c := checkResult{Name: "CLI version", Status: "ok", Message: fmt.Sprintf("v%s (latest)", currentVersion)}
+		printCheck(c)
+		return append(results, c)
+	}
+
+	// New version available — show changelog
+	c := checkResult{
+		Name:    "CLI version",
+		Status:  "warn",
+		Message: fmt.Sprintf("v%s → v%s available (run: reposwarm upgrade)", currentVersion, latestVer),
+	}
+	printCheck(c)
+	results = append(results, c)
+
+	// Fetch and display changelog
+	changes, chErr := getChangelog(currentVersion, latestVer)
+	if chErr == nil && len(changes) > 0 {
+		if !flagJSON {
+			fmt.Println()
+			output.F.Info("What's new:")
+			for _, line := range changes {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+	}
+
+	return results
+}
+
+// recommendedAction pairs a human description with a copyable command.
+type recommendedAction struct {
+	desc string
+	cmd  string
+}
+
+func buildRecommendedActions(checks []checkResult) []recommendedAction {
+	var actions []recommendedAction
+	seen := map[string]bool{}
+
+	for _, c := range checks {
+		if c.Status != "fail" && c.Status != "warn" {
+			continue
+		}
+
+		var cmd, desc string
+
+		switch {
+		case strings.Contains(c.Name, "API Server version"):
+			cmd = "reposwarm upgrade api"
+			desc = "Upgrade API server to latest version"
+		case strings.Contains(c.Name, "UI version"):
+			cmd = "reposwarm upgrade ui"
+			desc = "Upgrade UI to latest version"
+		case strings.Contains(c.Name, "CLI version") && strings.Contains(c.Message, "available"):
+			cmd = "reposwarm upgrade"
+			desc = "Upgrade CLI to latest version"
+		case strings.Contains(c.Name, "Provider") || strings.Contains(c.Name, "Inference"):
+			cmd = "reposwarm config provider setup"
+			desc = "Configure LLM provider settings"
+		case strings.Contains(c.Name, "Worker") && strings.Contains(c.Message, "not running"):
+			cmd = "reposwarm restart worker"
+			desc = "Restart the worker process"
+		case strings.Contains(c.Name, "Temporal"):
+			cmd = "reposwarm restart temporal"
+			desc = "Restart Temporal server"
+		case strings.Contains(c.Name, "API") && strings.Contains(c.Message, "not reachable"):
+			cmd = "reposwarm restart api"
+			desc = "Restart the API server"
+		default:
+			continue
+		}
+
+		if cmd != "" && !seen[cmd] {
+			seen[cmd] = true
+			actions = append(actions, recommendedAction{desc: desc, cmd: cmd})
+		}
+	}
+
+	return actions
 }
 
 func checkConfig() []checkResult {

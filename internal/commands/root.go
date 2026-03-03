@@ -61,7 +61,7 @@ Get started:
 
 	// Setup & diagnostics
 	root.AddCommand(newNewCmd())
-	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newDoctorCmd(version))
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the version number",

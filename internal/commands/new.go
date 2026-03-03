@@ -157,7 +157,7 @@ Examples:
 				output.F.Info("Running diagnostics...")
 				fmt.Println()
 
-				doctorCmd := newDoctorCmd()
+				doctorCmd := newDoctorCmd("")
 				doctorCmd.SetArgs([]string{})
 				_ = doctorCmd.Execute()
 
