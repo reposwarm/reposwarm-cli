@@ -40,6 +40,35 @@ jobs:
           GOOS=linux  GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/reposwarm-linux-amd64 ./cmd/reposwarm
           ls -lh dist/
 
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous release tag
+          PREV_TAG=$(gh release list --limit 2 --json tagName -q '.[1].tagName' 2>/dev/null || echo "")
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if [ -n "$PREV_TAG" ]; then
+            # Get commit messages between previous release and HEAD
+            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"• %s" --no-merges | head -30)
+          else
+            CHANGES=$(git log --pretty=format:"• %s" --no-merges -10)
+          fi
+
+          # Write to file (multiline safe)
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$CHANGES"
+            echo ""
+            echo "---"
+            echo "Install: \`curl -fsSL https://raw.githubusercontent.com/loki-bedlam/reposwarm-cli/main/install.sh | sh\`"
+            echo "Upgrade: \`reposwarm upgrade\`"
+          } > /tmp/release-notes.md
+
+          cat /tmp/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,5 +82,5 @@ jobs:
             dist/reposwarm-linux-amd64 \
             --title "v${VERSION}" \
             --latest \
-            --notes "Install: \`curl -fsSL https://raw.githubusercontent.com/loki-bedlam/reposwarm-cli/main/install.sh | sh\`"
+            --notes-file /tmp/release-notes.md
           echo "✅ Release v${VERSION} published"

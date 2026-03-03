@@ -84,6 +84,18 @@ Examples:
 			fmt.Printf(" done\n\n")
 
 			output.F.Success(fmt.Sprintf("reposwarm v%s installed — restart your shell or run 'reposwarm version' to verify", latestVer))
+
+			// Show what changed since the old version
+			changes, err := getChangelog(currentVersion, latestVer)
+			if err == nil && len(changes) > 0 {
+				fmt.Println()
+				output.F.Section("What's New")
+				for _, line := range changes {
+					fmt.Printf("  %s\n", line)
+				}
+				fmt.Println()
+			}
+
 			return nil
 		},
 	}
@@ -130,6 +142,99 @@ func getLatestRelease() (version, downloadURL string, err error) {
 	}
 
 	return version, "", fmt.Errorf("no binary found for %s in release assets", binaryName)
+}
+
+// getChangelog fetches release notes between the old and new version from GitHub.
+// Returns one-liner changes (commit messages) or release body lines.
+func getChangelog(oldVersion, newVersion string) ([]string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Fetch the new release body — it contains the changelog
+	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/loki-bedlam/reposwarm-cli/releases/tags/v%s", newVersion))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var release struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, err
+	}
+
+	if release.Body == "" {
+		return nil, nil
+	}
+
+	// Parse the body — extract lines starting with "•" or "-" (changelog items)
+	var changes []string
+	for _, line := range splitLines(release.Body) {
+		trimmed := trimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		// Skip headers and install instructions
+		if len(trimmed) > 0 && (trimmed[0] == '#' || contains(trimmed, "Install:") || contains(trimmed, "Upgrade:") || trimmed == "---") {
+			continue
+		}
+		// Include bullet points
+		if len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] == '*' || (len(trimmed) >= 3 && trimmed[:3] == "• ")) {
+			changes = append(changes, trimmed)
+		}
+	}
+
+	// Limit to 20 lines
+	if len(changes) > 20 {
+		changes = changes[:20]
+		changes = append(changes, fmt.Sprintf("  ... and more (see https://github.com/loki-bedlam/reposwarm-cli/releases/tag/v%s)", newVersion))
+	}
+
+	return changes, nil
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+func trimSpace(s string) string {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') {
+		i++
+	}
+	j := len(s)
+	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r') {
+		j--
+	}
+	return s[i:j]
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || findSubstring(s, sub))
+}
+
+func findSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func downloadBinary(url string) (string, error) {
