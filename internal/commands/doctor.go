@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -734,10 +735,32 @@ func checkWorkerLogs() []checkResult {
 		return results
 	}
 
-	// Scan for errors
+	// Scan for errors — skip summary lines like "Found X errors and Y warnings"
 	errorPatterns := []string{"error", "Error", "ERROR", "failed", "Failed", "FAILED", "Traceback", "Exception", "ValidationError"}
+	summaryPattern := regexp.MustCompile(`(?i)found \d+ errors? and \d+ warnings?`)
+	envValidationFailed := regexp.MustCompile(`(?i)environment validation failed`)
+
 	var errorLines []string
+	var workerErrors, workerWarnings int
+
 	for _, line := range logResp.Lines {
+		// Extract the worker's own validation summary if present
+		if m := regexp.MustCompile(`Found (\d+) errors? and (\d+) warnings?`).FindStringSubmatch(line); len(m) == 3 {
+			fmt.Sscanf(m[1], "%d", &workerErrors)
+			fmt.Sscanf(m[2], "%d", &workerWarnings)
+			continue // Don't count the summary line as an error
+		}
+
+		// Skip "ENVIRONMENT VALIDATION FAILED" — it's a summary header, not a distinct error
+		if envValidationFailed.MatchString(line) {
+			continue
+		}
+
+		// Skip summary lines
+		if summaryPattern.MatchString(line) {
+			continue
+		}
+
 		for _, pattern := range errorPatterns {
 			if strings.Contains(line, pattern) {
 				errorLines = append(errorLines, line)
@@ -746,12 +769,25 @@ func checkWorkerLogs() []checkResult {
 		}
 	}
 
+	if workerErrors > 0 || workerWarnings > 0 {
+		// Use the worker's own validation count — it's more accurate
+		msg := fmt.Sprintf("worker env validation: %s, %s",
+			pluralizeCount(workerErrors, "error"), pluralizeCount(workerWarnings, "warning"))
+		status := "warn"
+		if workerErrors > 0 {
+			status = "warn"
+		}
+		c := checkResult{"Worker validation", status, msg}
+		printCheck(c)
+		results = append(results, c)
+	}
+
 	if len(errorLines) > 0 {
 		shown := errorLines
 		if len(shown) > 5 {
 			shown = shown[len(shown)-5:]
 		}
-		msg := fmt.Sprintf("%d error(s) in last 20 lines", len(errorLines))
+		msg := fmt.Sprintf("%s in last 20 log lines", pluralizeCount(len(errorLines), "error"))
 		c := checkResult{"Worker log", "warn", msg}
 		printCheck(c)
 		results = append(results, c)
@@ -765,7 +801,7 @@ func checkWorkerLogs() []checkResult {
 				output.F.Printf("    %s\n", output.Yellow(trimmed))
 			}
 		}
-	} else {
+	} else if workerErrors == 0 && workerWarnings == 0 {
 		c := checkResult{"Worker log", "ok", "no recent errors"}
 		printCheck(c)
 		results = append(results, c)
@@ -783,6 +819,13 @@ func countStatus(checks []checkResult, status string) int {
 		}
 	}
 	return n
+}
+
+func pluralizeCount(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 func checkProviderCredentials() []checkResult {
@@ -929,7 +972,7 @@ func checkProviderCredentials() []checkResult {
 		if inferenceResp.Success {
 			c := checkResult{"Inference check", "ok", fmt.Sprintf("working (%dms)", inferenceResp.LatencyMs)}
 			if !flagJSON {
-				output.Successf("✓ working (%dms)", inferenceResp.LatencyMs)
+				output.Successf("working (%dms)", inferenceResp.LatencyMs)
 			}
 			results = append(results, c)
 		} else {
