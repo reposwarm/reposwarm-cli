@@ -502,6 +502,16 @@ func newProviderShowCmd() *cobra.Command {
 					"smallModel":  pc.SmallModel,
 					"modelPins":   pc.ModelPins,
 				}
+				if provider == config.ProviderBedrock {
+					bedrockAuth := pc.BedrockAuth
+					if bedrockAuth == "" {
+						bedrockAuth = config.BedrockAuthIAMRole
+					}
+					result["bedrockAuth"] = string(bedrockAuth)
+					if pc.AWSProfile != "" {
+						result["awsProfile"] = pc.AWSProfile
+					}
+				}
 				if workerProvider != "" {
 					result["workerProvider"] = workerProvider
 				}

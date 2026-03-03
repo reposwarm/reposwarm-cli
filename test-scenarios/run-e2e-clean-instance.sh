@@ -56,6 +56,15 @@ set -euo pipefail
 
 echo "=== RepoSwarm E2E Bootstrap ==="
 
+# Wait for cloud-init to finish (apt lock)
+echo "Waiting for cloud-init to finish..."
+cloud-init status --wait 2>/dev/null || sleep 30
+# Also wait for any dpkg locks
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+  echo "  Waiting for dpkg lock..."
+  sleep 5
+done
+
 # Install deps
 sudo apt-get update -qq
 sudo apt-get install -y -qq docker.io docker-compose-v2 nodejs npm python3 python3-venv jq curl > /dev/null
@@ -66,7 +75,7 @@ sudo usermod -aG docker ubuntu
 
 # Install the CLI
 sudo cp /home/ubuntu/e2e/reposwarm /usr/local/bin/reposwarm
-chmod +x /usr/local/bin/reposwarm
+sudo chmod +x /usr/local/bin/reposwarm
 
 # Create minimal config
 mkdir -p /home/ubuntu/.reposwarm
