@@ -212,27 +212,166 @@ func applyGitProvider(cfg *config.Config, provider string) error {
 		})
 	}
 
+	if flagAgent {
+		fmt.Printf("  ✓ Git provider set to %s (%s)\n", b.Label, provider)
+		fmt.Println()
+		if len(b.EnvVars) > 0 {
+			fmt.Println("Required environment variables:")
+			for _, ev := range b.EnvVars {
+				if ev.Required {
+					fmt.Printf("  • %s — %s\n", ev.Key, ev.Desc)
+					fmt.Printf("    Set: reposwarm config worker-env set %s <value>\n", ev.Key)
+				}
+			}
+			fmt.Println()
+		}
+		if b.Hint != "" {
+			fmt.Println(b.Hint)
+		}
+		if b.AuthNote != "" {
+			fmt.Println(b.AuthNote)
+		}
+		return nil
+	}
+
 	output.Successf("Git provider set to %s (%s)", b.Label, provider)
 	fmt.Println()
-
-	// Show required env vars
-	envReqs := config.GitProviderEnvVars(provider)
-	if len(envReqs) > 0 {
-		output.F.Info("Required environment variables:")
-		for _, ev := range envReqs {
-			if ev.Required {
-				fmt.Printf("  • %s — %s\n", output.Cyan(ev.Key), ev.Desc)
-				fmt.Printf("    Set: %s\n", output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s <value>", ev.Key)))
-			}
-		}
-		fmt.Println()
-	}
 
 	if b.Hint != "" {
 		output.F.Info(b.Hint)
 	}
 	if b.AuthNote != "" {
 		output.F.Info(b.AuthNote)
+	}
+
+	// Interactive: prompt for required env vars
+	if len(b.EnvVars) == 0 {
+		return nil
+	}
+
+	// Try to get current env var values from API
+	currentVals := map[string]string{}
+	client, clientErr := getClient()
+	if clientErr == nil {
+		var envResp struct {
+			Entries []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+				Set   bool   `json:"set"`
+			} `json:"entries"`
+		}
+		if err := client.Get(ctx(), "/workers/worker-1/env", &envResp); err == nil {
+			for _, e := range envResp.Entries {
+				if e.Set {
+					currentVals[e.Key] = e.Value
+				}
+			}
+		}
+	}
+
+	fmt.Println()
+	output.F.Info("Configure required credentials:")
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+	anySet := false
+
+	for _, ev := range b.EnvVars {
+		if !ev.Required {
+			continue
+		}
+
+		current := currentVals[ev.Key]
+		prompt := fmt.Sprintf("  %s", ev.Key)
+		if ev.Desc != "" {
+			prompt += fmt.Sprintf(" (%s)", ev.Desc)
+		}
+
+		if current != "" {
+			masked := current
+			if ev.Secret && len(current) > 8 {
+				masked = current[:4] + "..." + current[len(current)-4:]
+			}
+			prompt += fmt.Sprintf(" [%s]", masked)
+		}
+		prompt += ": "
+
+		fmt.Print(prompt)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(answer)
+
+		if answer == "" {
+			if current != "" {
+				fmt.Printf("  %s (keeping current value)\n", output.Dim("→"))
+			} else {
+				fmt.Printf("  %s skipped — set later: %s\n", output.Yellow("⚠"),
+					output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s <value>", ev.Key)))
+			}
+			continue
+		}
+
+		// Set via API
+		if client != nil {
+			body := map[string]string{"value": answer}
+			var resp struct {
+				Key string `json:"key"`
+			}
+			if err := client.Put(ctx(), "/workers/worker-1/env/"+ev.Key, body, &resp); err != nil {
+				fmt.Printf("  %s failed to set %s: %v\n", output.Red("✗"), ev.Key, err)
+				fmt.Printf("  Set manually: %s\n", output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s %s", ev.Key, answer)))
+			} else {
+				fmt.Printf("  %s %s set\n", output.Green("✓"), ev.Key)
+				anySet = true
+			}
+		} else {
+			fmt.Printf("  %s No API connection — set manually: %s\n", output.Yellow("⚠"),
+				output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s %s", ev.Key, answer)))
+		}
+	}
+
+	// Also prompt for optional vars
+	for _, ev := range b.EnvVars {
+		if ev.Required {
+			continue
+		}
+		current := currentVals[ev.Key]
+		prompt := fmt.Sprintf("  %s", ev.Key)
+		if ev.Desc != "" {
+			prompt += fmt.Sprintf(" (%s)", ev.Desc)
+		}
+		prompt += " [optional"
+		if current != "" {
+			masked := current
+			if ev.Secret && len(current) > 8 {
+				masked = current[:4] + "..." + current[len(current)-4:]
+			}
+			prompt += fmt.Sprintf(", current: %s", masked)
+		}
+		prompt += "]: "
+
+		fmt.Print(prompt)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(answer)
+
+		if answer == "" {
+			continue
+		}
+
+		if client != nil {
+			body := map[string]string{"value": answer}
+			var resp struct{ Key string }
+			if err := client.Put(ctx(), "/workers/worker-1/env/"+ev.Key, body, &resp); err != nil {
+				fmt.Printf("  %s failed to set %s: %v\n", output.Red("✗"), ev.Key, err)
+			} else {
+				fmt.Printf("  %s %s set\n", output.Green("✓"), ev.Key)
+				anySet = true
+			}
+		}
+	}
+
+	if anySet {
+		fmt.Println()
+		output.F.Info("Restart worker to apply changes: " + output.Cyan("reposwarm restart worker"))
 	}
 
 	return nil
