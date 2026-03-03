@@ -660,7 +660,7 @@ func checkWorkerEnv() []checkResult {
 	// All env var requirements come from providers.json — single source of truth
 	cfg, cfgErr := config.Load()
 	if cfgErr == nil {
-		for _, req := range config.RequiredEnvVars(&cfg.ProviderConfig) {
+		for _, req := range config.RequiredEnvVarsWithGit(&cfg.ProviderConfig, cfg.GitProvider) {
 			if req.Required {
 				required[req.Key] = req.Desc
 			} else {

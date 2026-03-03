@@ -47,11 +47,20 @@ type EnvVarDef struct {
 	Secret   bool     `json:"secret,omitempty"`   // true = sensitive, don't display value
 }
 
+// GitProviderBundle describes a git provider's configuration.
+type GitProviderBundle struct {
+	Label    string      `json:"label"`
+	EnvVars  []EnvVarDef `json:"envVars"`
+	AuthNote string      `json:"authNote,omitempty"`
+	Hint     string      `json:"hint,omitempty"`
+}
+
 // ProvidersFile is the top-level structure of providers.json.
 type ProvidersFile struct {
-	Providers    map[string]ProviderBundle `json:"providers"`
-	CommonEnvVars []EnvVarDef             `json:"commonEnvVars"`
-	KnownEnvVars  []string                `json:"knownEnvVars"`
+	Providers     map[string]ProviderBundle    `json:"providers"`
+	CommonEnvVars []EnvVarDef                  `json:"commonEnvVars"`
+	GitProviders  map[string]GitProviderBundle `json:"gitProviders"`
+	KnownEnvVars  []string                     `json:"knownEnvVars"`
 }
 
 var cachedProviders *ProvidersFile
@@ -181,4 +190,46 @@ func GetAuthMethods(provider Provider) (map[string]AuthMethodDef, string) {
 		return nil, ""
 	}
 	return b.EnvVars.AuthMethods, b.EnvVars.DefaultAuthMethod
+}
+
+// ValidGitProviders returns the list of supported git provider names.
+func ValidGitProviders() []string {
+	pf, err := LoadProviders()
+	if err != nil {
+		return []string{"github", "codecommit", "gitlab", "azure", "bitbucket"}
+	}
+	names := make([]string, 0, len(pf.GitProviders))
+	for k := range pf.GitProviders {
+		names = append(names, k)
+	}
+	return names
+}
+
+// GetGitProviderBundle returns the bundle for a given git provider.
+func GetGitProviderBundle(name string) (*GitProviderBundle, error) {
+	pf, err := LoadProviders()
+	if err != nil {
+		return nil, err
+	}
+	b, ok := pf.GitProviders[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown git provider: %s", name)
+	}
+	return &b, nil
+}
+
+// GitProviderEnvVars returns the env var requirements for the configured git provider.
+func GitProviderEnvVars(gitProvider string) []EnvRequirement {
+	if gitProvider == "" {
+		return nil
+	}
+	b, err := GetGitProviderBundle(gitProvider)
+	if err != nil {
+		return nil
+	}
+	var reqs []EnvRequirement
+	for _, ev := range b.EnvVars {
+		reqs = append(reqs, EnvRequirement{Key: ev.Key, Desc: ev.Desc, Required: ev.Required, Alts: ev.Alts})
+	}
+	return reqs
 }

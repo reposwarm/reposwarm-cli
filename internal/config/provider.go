@@ -223,6 +223,11 @@ type EnvRequirement struct {
 
 // RequiredEnvVars returns the list of env vars that must/should be set, driven by providers.json.
 func RequiredEnvVars(pc *ProviderConfig) []EnvRequirement {
+	return RequiredEnvVarsWithGit(pc, "")
+}
+
+// RequiredEnvVarsWithGit returns env var requirements including git provider.
+func RequiredEnvVarsWithGit(pc *ProviderConfig, gitProvider string) []EnvRequirement {
 	pf, err := LoadProviders()
 	if err != nil {
 		return nil
@@ -255,6 +260,12 @@ func RequiredEnvVars(pc *ProviderConfig) []EnvRequirement {
 				reqs = append(reqs, EnvRequirement{Key: ev.Key, Desc: ev.Desc, Required: ev.Required, Alts: ev.Alts})
 			}
 		}
+	}
+
+	// Git provider env vars
+	if gitProvider != "" {
+		gitReqs := GitProviderEnvVars(gitProvider)
+		reqs = append(reqs, gitReqs...)
 	}
 
 	return reqs

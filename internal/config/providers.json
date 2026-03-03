@@ -98,8 +98,48 @@
     }
   },
   "commonEnvVars": [
-    { "key": "GITHUB_TOKEN", "desc": "GitHub access token for repo cloning", "required": false, "alts": ["GITHUB_PAT"] }
   ],
+  "gitProviders": {
+    "github": {
+      "label": "GitHub",
+      "envVars": [
+        { "key": "GITHUB_TOKEN", "desc": "GitHub personal access token", "required": true, "secret": true, "alts": ["GITHUB_PAT", "GH_TOKEN"] }
+      ],
+      "hint": "Create at https://github.com/settings/tokens (scopes: repo)"
+    },
+    "codecommit": {
+      "label": "AWS CodeCommit",
+      "envVars": [
+        { "key": "AWS_REGION", "desc": "AWS region for CodeCommit", "required": true, "alts": ["AWS_DEFAULT_REGION"] }
+      ],
+      "authNote": "Uses IAM credentials (instance profile, AWS CLI config, or access keys). Ensure git-remote-codecommit is installed: pip install git-remote-codecommit",
+      "hint": "Requires AWS CLI configured + git-remote-codecommit helper"
+    },
+    "gitlab": {
+      "label": "GitLab",
+      "envVars": [
+        { "key": "GITLAB_TOKEN", "desc": "GitLab personal/project access token", "required": true, "secret": true },
+        { "key": "GITLAB_URL", "desc": "GitLab instance URL (default: https://gitlab.com)", "required": false }
+      ],
+      "hint": "Create at Settings → Access Tokens (scopes: read_repository, read_api)"
+    },
+    "azure": {
+      "label": "Azure DevOps",
+      "envVars": [
+        { "key": "AZURE_DEVOPS_PAT", "desc": "Azure DevOps personal access token", "required": true, "secret": true },
+        { "key": "AZURE_DEVOPS_ORG", "desc": "Azure DevOps organization URL", "required": true }
+      ],
+      "hint": "Create at https://dev.azure.com/{org}/_usersSettings/tokens (scope: Code Read)"
+    },
+    "bitbucket": {
+      "label": "Bitbucket",
+      "envVars": [
+        { "key": "BITBUCKET_USERNAME", "desc": "Bitbucket username", "required": true },
+        { "key": "BITBUCKET_APP_PASSWORD", "desc": "Bitbucket app password", "required": true, "secret": true }
+      ],
+      "hint": "Create app password at Bitbucket Settings → App passwords (permission: Repositories Read)"
+    }
+  },
   "knownEnvVars": [
     "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "GITHUB_PAT",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION",

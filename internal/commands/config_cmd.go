@@ -25,6 +25,7 @@ func newConfigCmd() *cobra.Command {
 	cmd.AddCommand(newConfigServerSetCmd())
 	cmd.AddCommand(newConfigProviderCmd())
 	cmd.AddCommand(newConfigModelCmd())
+	cmd.AddCommand(newConfigGitCmd())
 	return cmd
 }
 

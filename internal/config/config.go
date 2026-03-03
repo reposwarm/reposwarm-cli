@@ -21,6 +21,9 @@ type Config struct {
 	// Provider configuration
 	ProviderConfig ProviderConfig `json:"providerConfig,omitempty"`
 
+	// Git provider configuration
+	GitProvider string `json:"gitProvider,omitempty"` // github, codecommit, gitlab, azure, bitbucket
+
 	// Local setup defaults (used by 'reposwarm new --local' and guides)
 	WorkerRepoURL  string `json:"workerRepoUrl,omitempty"`
 	APIRepoURL     string `json:"apiRepoUrl,omitempty"`
