@@ -99,8 +99,70 @@ Examples:
 
 				// Run setup with spinners
 				printer := &spinnerPrinter{}
-				_, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
-				return err
+				result, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
+				if err != nil {
+					return err
+				}
+
+				// ── Post-setup: Provider configuration ──
+				fmt.Println()
+				output.F.Section("Provider Configuration")
+				fmt.Println()
+				output.F.Info("RepoSwarm needs an LLM provider to investigate repos.")
+				fmt.Println()
+
+				reader := bufio.NewReader(os.Stdin)
+				fmt.Print("  Configure provider now? [Y/n] ")
+				answer, _ := reader.ReadString('\n')
+				answer = strings.TrimSpace(answer)
+
+				if answer == "" || strings.ToLower(answer) == "y" || strings.ToLower(answer) == "yes" {
+					// Run provider setup inline (calls the same flow as 'config provider setup')
+					providerCmd := newConfigProviderCmd()
+					// Find 'setup' subcommand
+					for _, sub := range providerCmd.Commands() {
+						if sub.Name() == "setup" {
+							sub.SetArgs([]string{})
+							if setupErr := sub.Execute(); setupErr != nil {
+								output.F.Warning(fmt.Sprintf("Provider setup had issues: %v", setupErr))
+								output.F.Info("You can configure later with: reposwarm config provider setup")
+							} else {
+								// Ask about worker restart
+								fmt.Println()
+								fmt.Print("  Restart worker to apply new settings? [Y/n] ")
+								restartAnswer, _ := reader.ReadString('\n')
+								restartAnswer = strings.TrimSpace(restartAnswer)
+								if restartAnswer == "" || strings.ToLower(restartAnswer) == "y" {
+									fmt.Print("  Restarting worker... ")
+									restartCmd := newRestartCmd()
+									restartCmd.SetArgs([]string{"worker"})
+									if restartErr := restartCmd.Execute(); restartErr != nil {
+										output.F.Warning(fmt.Sprintf("Restart failed: %v", restartErr))
+									} else {
+										output.Successf("Worker restarted")
+									}
+								}
+							}
+							break
+						}
+					}
+				} else {
+					output.F.Info("Skipped. Configure later: reposwarm config provider setup")
+				}
+
+				// ── Post-setup: Health check ──
+				fmt.Println()
+				output.F.Section("Health Check")
+				fmt.Println()
+				output.F.Info("Running diagnostics...")
+				fmt.Println()
+
+				doctorCmd := newDoctorCmd()
+				doctorCmd.SetArgs([]string{})
+				_ = doctorCmd.Execute()
+
+				_ = result // used by JSON/agent modes above
+				return nil
 			}
 
 			// JSON mode — generate guides

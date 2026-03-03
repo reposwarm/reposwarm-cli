@@ -22,30 +22,44 @@ const (
 	BedrockAuthAPIKey       BedrockAuthMethod = "api-key"         // AWS_BEARER_TOKEN_BEDROCK (Bedrock API keys)
 )
 
-// ValidProviders returns all supported provider names.
+// ValidProviders returns all supported provider names from the bundle.
 func ValidProviders() []string {
-	return []string{string(ProviderAnthropic), string(ProviderBedrock), string(ProviderLiteLLM)}
+	pf, err := LoadProviders()
+	if err != nil {
+		// Fallback to hardcoded if bundle loading fails
+		return []string{"anthropic", "bedrock", "litellm"}
+	}
+	names := make([]string, 0, len(pf.Providers))
+	for k := range pf.Providers {
+		names = append(names, k)
+	}
+	return names
 }
 
 // IsValidProvider returns true if the provider name is known.
 func IsValidProvider(p string) bool {
-	switch Provider(p) {
-	case ProviderAnthropic, ProviderBedrock, ProviderLiteLLM:
-		return true
+	pf, err := LoadProviders()
+	if err != nil {
+		switch Provider(p) {
+		case ProviderAnthropic, ProviderBedrock, ProviderLiteLLM:
+			return true
+		}
+		return false
 	}
-	return false
+	_, ok := pf.Providers[p]
+	return ok
 }
 
 // ProviderConfig holds provider-specific configuration.
 type ProviderConfig struct {
 	Provider     Provider          `json:"provider,omitempty"`
 	AWSRegion    string            `json:"awsRegion,omitempty"`
-	BedrockAuth  BedrockAuthMethod `json:"bedrockAuth,omitempty"`  // AWS auth method for Bedrock
-	AWSProfile   string            `json:"awsProfile,omitempty"`   // for "profile" auth method
-	ProxyURL     string            `json:"proxyUrl,omitempty"`     // LiteLLM proxy URL
-	ProxyKey     string            `json:"proxyKey,omitempty"`     // LiteLLM proxy API key
-	SmallModel   string            `json:"smallModel,omitempty"`   // Fast/cheap model for triage
-	ModelPins    map[string]string `json:"modelPins,omitempty"`    // alias → pinned model ID
+	BedrockAuth  BedrockAuthMethod `json:"bedrockAuth,omitempty"`
+	AWSProfile   string            `json:"awsProfile,omitempty"`
+	ProxyURL     string            `json:"proxyUrl,omitempty"`
+	ProxyKey     string            `json:"proxyKey,omitempty"`
+	SmallModel   string            `json:"smallModel,omitempty"`
+	ModelPins    map[string]string `json:"modelPins,omitempty"`
 }
 
 // ModelAlias maps human-friendly names to provider-specific model IDs.
@@ -55,18 +69,37 @@ type ModelAlias struct {
 	Bedrock   string
 }
 
-// KnownAliases returns the standard model alias table.
+// KnownAliases returns the standard model alias table from the bundle.
 func KnownAliases() []ModelAlias {
-	return []ModelAlias{
-		{"sonnet", "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6"},
-		{"opus", "claude-opus-4-6", "us.anthropic.claude-opus-4-6-v1"},
-		{"haiku", "claude-haiku-4-5", "us.anthropic.claude-haiku-4-5-20251001-v1:0"},
-		{"sonnet-3.5", "claude-3-5-sonnet-20241022", "us.anthropic.claude-3-5-sonnet-20241022-v2:0"},
+	pf, err := LoadProviders()
+	if err != nil {
+		return nil
 	}
+
+	// Build aliases from the intersection of anthropic and bedrock models
+	anthro, hasAnthro := pf.Providers["anthropic"]
+	bedrock, hasBedrock := pf.Providers["bedrock"]
+
+	if !hasAnthro {
+		return nil
+	}
+
+	var aliases []ModelAlias
+	for alias, anthroModel := range anthro.Models {
+		bedrockModel := ""
+		if hasBedrock {
+			bedrockModel = bedrock.Models[alias]
+		}
+		aliases = append(aliases, ModelAlias{
+			Alias:     alias,
+			Anthropic: anthroModel,
+			Bedrock:   bedrockModel,
+		})
+	}
+	return aliases
 }
 
 // ResolveModel takes an alias or raw model ID and returns the provider-specific model ID.
-// If modelPins has a pin for this alias, use it. Otherwise resolve from the alias table.
 func ResolveModel(alias string, provider Provider, pins map[string]string) string {
 	// Check pins first
 	if pins != nil {
@@ -75,33 +108,32 @@ func ResolveModel(alias string, provider Provider, pins map[string]string) strin
 		}
 	}
 
-	// Check alias table
-	for _, a := range KnownAliases() {
-		if a.Alias == alias {
-			switch provider {
-			case ProviderBedrock:
-				return a.Bedrock
-			case ProviderAnthropic, ProviderLiteLLM:
-				return a.Anthropic
-			}
+	// Check bundle
+	b, err := GetProviderBundle(provider)
+	if err == nil {
+		if modelID, ok := b.Models[alias]; ok {
+			return modelID
 		}
 	}
 
-	// Not an alias — return as-is (raw model ID)
+	// Not an alias — return as-is
 	return alias
 }
 
-// DefaultSmallModel returns the default small/fast model for a provider.
+// DefaultSmallModel returns the default small/fast model from the bundle.
 func DefaultSmallModel(provider Provider) string {
-	switch provider {
-	case ProviderBedrock:
-		return "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-	default:
+	b, err := GetProviderBundle(provider)
+	if err != nil {
 		return "claude-haiku-4-5"
 	}
+	if b.SmallMod != "" {
+		return b.SmallMod
+	}
+	return "claude-haiku-4-5"
 }
 
 // WorkerEnvVars returns the env vars the worker needs for a given provider config.
+// Reads from providers.json for fixed values, applies config-specific overrides.
 func WorkerEnvVars(pc *ProviderConfig, model string) map[string]string {
 	vars := map[string]string{}
 
@@ -111,54 +143,71 @@ func WorkerEnvVars(pc *ProviderConfig, model string) map[string]string {
 		smallResolved = DefaultSmallModel(pc.Provider)
 	}
 
+	b, err := GetProviderBundle(pc.Provider)
+	if err != nil {
+		// Fallback: minimal vars
+		vars["ANTHROPIC_MODEL"] = resolved
+		return vars
+	}
+
+	// Set fixed-value env vars from bundle
+	for _, ev := range b.EnvVars.Always {
+		if ev.Value != "" {
+			vars[ev.Key] = ev.Value
+		}
+	}
+
+	// Set model vars
+	vars["ANTHROPIC_MODEL"] = resolved
+	if smallResolved != "" {
+		vars["ANTHROPIC_SMALL_FAST_MODEL"] = smallResolved
+	}
+
+	// Provider-specific overrides
 	switch pc.Provider {
 	case ProviderBedrock:
-		vars["CLAUDE_CODE_USE_BEDROCK"] = "1"
-		vars["AWS_REGION"] = pc.AWSRegion
-		if pc.AWSRegion == "" {
-			vars["AWS_REGION"] = "us-east-1"
+		region := pc.AWSRegion
+		if region == "" {
+			region = "us-east-1"
 		}
-		vars["ANTHROPIC_MODEL"] = resolved
-		vars["ANTHROPIC_SMALL_FAST_MODEL"] = smallResolved
+		vars["AWS_REGION"] = region
 
-		// Set auth method specific env vars
-		switch pc.BedrockAuth {
-		case BedrockAuthLongTermKeys:
-			// Keys are stored separately, not in config
-			// The CLI will set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY directly
-		case BedrockAuthSSO, BedrockAuthProfile:
-			if pc.AWSProfile != "" {
-				vars["AWS_PROFILE"] = pc.AWSProfile
+		// Auth method specific
+		if b.EnvVars.AuthMethods != nil {
+			authKey := string(pc.BedrockAuth)
+			if authKey == "" {
+				authKey = b.EnvVars.DefaultAuthMethod
 			}
-		case BedrockAuthAPIKey:
-			// AWS_BEARER_TOKEN_BEDROCK is stored separately, set by CLI
-		case BedrockAuthIAMRole, "":
-			// IAM role auth - no extra env vars needed (inherited from instance/task)
+			if am, ok := b.EnvVars.AuthMethods[authKey]; ok {
+				for _, ev := range am.EnvVars {
+					if ev.Value != "" {
+						vars[ev.Key] = ev.Value
+					}
+				}
+			}
 		}
 
-		// Set version pins if available
-		if pc.ModelPins != nil {
-			if v, ok := pc.ModelPins["opus"]; ok {
-				vars["ANTHROPIC_DEFAULT_OPUS_MODEL"] = v
-			}
-			if v, ok := pc.ModelPins["sonnet"]; ok {
-				vars["ANTHROPIC_DEFAULT_SONNET_MODEL"] = v
-			}
-			if v, ok := pc.ModelPins["haiku"]; ok {
-				vars["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = v
+		// Profile-based auth
+		if (pc.BedrockAuth == BedrockAuthSSO || pc.BedrockAuth == BedrockAuthProfile) && pc.AWSProfile != "" {
+			vars["AWS_PROFILE"] = pc.AWSProfile
+		}
+
+		// Version pins
+		if pc.ModelPins != nil && b.PinVars != nil {
+			for alias, envVar := range b.PinVars {
+				if pinned, ok := pc.ModelPins[alias]; ok {
+					vars[envVar] = pinned
+				}
 			}
 		}
 
 	case ProviderLiteLLM:
-		// LiteLLM proxy uses standard Anthropic SDK format but routes through proxy
-		vars["ANTHROPIC_API_KEY"] = pc.ProxyKey
-		vars["ANTHROPIC_BASE_URL"] = pc.ProxyURL
-		vars["ANTHROPIC_MODEL"] = resolved
-
-	case ProviderAnthropic:
-		// Standard Anthropic — API key should already be set
-		vars["ANTHROPIC_MODEL"] = resolved
-		vars["ANTHROPIC_SMALL_FAST_MODEL"] = smallResolved
+		if pc.ProxyKey != "" {
+			vars["ANTHROPIC_API_KEY"] = pc.ProxyKey
+		}
+		if pc.ProxyURL != "" {
+			vars["ANTHROPIC_BASE_URL"] = pc.ProxyURL
+		}
 	}
 
 	return vars
@@ -166,58 +215,46 @@ func WorkerEnvVars(pc *ProviderConfig, model string) map[string]string {
 
 // EnvRequirement describes an environment variable requirement.
 type EnvRequirement struct {
-	Key      string   // Environment variable name
-	Desc     string   // Human-readable description
-	Required bool     // true = must be set, false = optional but recommended
-	Alts     []string // Alternative keys (e.g. GITHUB_PAT for GITHUB_TOKEN)
+	Key      string
+	Desc     string
+	Required bool
+	Alts     []string
 }
 
-// RequiredEnvVars returns the list of env vars that MUST be set for a given provider+auth config.
+// RequiredEnvVars returns the list of env vars that must/should be set, driven by providers.json.
 func RequiredEnvVars(pc *ProviderConfig) []EnvRequirement {
-	// Common to all providers
-	reqs := []EnvRequirement{
-		{Key: "GITHUB_TOKEN", Desc: "GitHub access token for repo cloning", Required: false, Alts: []string{"GITHUB_PAT"}},
+	pf, err := LoadProviders()
+	if err != nil {
+		return nil
 	}
 
-	switch pc.Provider {
-	case ProviderAnthropic:
-		reqs = append(reqs,
-			EnvRequirement{Key: "ANTHROPIC_API_KEY", Desc: "Anthropic API key", Required: true},
-			EnvRequirement{Key: "ANTHROPIC_MODEL", Desc: "Model ID", Required: true},
-		)
+	// Start with common
+	var reqs []EnvRequirement
+	for _, ev := range pf.CommonEnvVars {
+		reqs = append(reqs, EnvRequirement{Key: ev.Key, Desc: ev.Desc, Required: ev.Required, Alts: ev.Alts})
+	}
 
-	case ProviderBedrock:
-		reqs = append(reqs,
-			EnvRequirement{Key: "CLAUDE_CODE_USE_BEDROCK", Desc: "Enable Bedrock mode (must be '1')", Required: true},
-			EnvRequirement{Key: "AWS_REGION", Desc: "AWS region for Bedrock", Required: true},
-			EnvRequirement{Key: "ANTHROPIC_MODEL", Desc: "Bedrock model ID", Required: true},
-		)
+	b, ok := pf.Providers[string(pc.Provider)]
+	if !ok {
+		return reqs
+	}
 
-		switch pc.BedrockAuth {
-		case BedrockAuthLongTermKeys:
-			reqs = append(reqs,
-				EnvRequirement{Key: "AWS_ACCESS_KEY_ID", Desc: "AWS access key", Required: true},
-				EnvRequirement{Key: "AWS_SECRET_ACCESS_KEY", Desc: "AWS secret key", Required: true},
-			)
-		case BedrockAuthSSO, BedrockAuthProfile:
-			reqs = append(reqs,
-				EnvRequirement{Key: "AWS_PROFILE", Desc: "AWS profile name", Required: true},
-			)
-		case BedrockAuthAPIKey:
-			reqs = append(reqs,
-				EnvRequirement{Key: "AWS_BEARER_TOKEN_BEDROCK", Desc: "Bedrock API key", Required: true},
-			)
-		case BedrockAuthIAMRole, "":
-			// No extra keys — inherited from instance/task role
+	// Always-required env vars
+	for _, ev := range b.EnvVars.Always {
+		reqs = append(reqs, EnvRequirement{Key: ev.Key, Desc: ev.Desc, Required: ev.Required, Alts: ev.Alts})
+	}
+
+	// Auth-method-specific env vars (Bedrock)
+	if b.EnvVars.AuthMethods != nil {
+		authKey := string(pc.BedrockAuth)
+		if authKey == "" {
+			authKey = b.EnvVars.DefaultAuthMethod
 		}
-
-	case ProviderLiteLLM:
-		reqs = append(reqs,
-			EnvRequirement{Key: "ANTHROPIC_BASE_URL", Desc: "LiteLLM proxy URL", Required: true},
-			EnvRequirement{Key: "ANTHROPIC_MODEL", Desc: "Model ID", Required: true},
-			// ANTHROPIC_API_KEY optional for LiteLLM (may not require auth)
-			EnvRequirement{Key: "ANTHROPIC_API_KEY", Desc: "LiteLLM proxy API key", Required: false},
-		)
+		if am, ok := b.EnvVars.AuthMethods[authKey]; ok {
+			for _, ev := range am.EnvVars {
+				reqs = append(reqs, EnvRequirement{Key: ev.Key, Desc: ev.Desc, Required: ev.Required, Alts: ev.Alts})
+			}
+		}
 	}
 
 	return reqs
@@ -225,11 +262,11 @@ func RequiredEnvVars(pc *ProviderConfig) []EnvRequirement {
 
 // EnvValidationResult holds the result of environment validation.
 type EnvValidationResult struct {
-	Valid    bool             // true if all required vars are set
-	Missing  []EnvRequirement // missing required env vars
-	Warnings []string         // warnings about the environment
-	Provider Provider         // provider being validated
-	Auth     BedrockAuthMethod // Bedrock auth method (if applicable)
+	Valid    bool
+	Missing  []EnvRequirement
+	Warnings []string
+	Provider Provider
+	Auth     BedrockAuthMethod
 }
 
 // ValidateWorkerEnv validates the current worker env against requirements.
@@ -246,10 +283,8 @@ func ValidateWorkerEnv(pc *ProviderConfig, currentEnv map[string]string) *EnvVal
 			continue
 		}
 
-		// Check if the key is set
 		val, hasKey := currentEnv[req.Key]
 		if !hasKey || val == "" {
-			// Check alternatives
 			found := false
 			for _, alt := range req.Alts {
 				if altVal, hasAlt := currentEnv[alt]; hasAlt && altVal != "" {
@@ -266,13 +301,11 @@ func ValidateWorkerEnv(pc *ProviderConfig, currentEnv map[string]string) *EnvVal
 
 	// Provider-specific validations
 	if pc.Provider == ProviderBedrock {
-		// Check CLAUDE_CODE_USE_BEDROCK is exactly "1"
 		if val, ok := currentEnv["CLAUDE_CODE_USE_BEDROCK"]; ok && val != "1" {
 			result.Warnings = append(result.Warnings, "CLAUDE_CODE_USE_BEDROCK must be '1' not '"+val+"'")
 			result.Valid = false
 		}
 
-		// Warn if model ID doesn't look like a Bedrock ID
 		if model, ok := currentEnv["ANTHROPIC_MODEL"]; ok {
 			if model != "" && !strings.Contains(model, "anthropic") && !strings.Contains(model, "claude") {
 				result.Warnings = append(result.Warnings, "Model ID '"+model+"' doesn't look like a Bedrock model (should contain 'anthropic' or 'claude')")
