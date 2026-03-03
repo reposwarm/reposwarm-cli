@@ -341,9 +341,22 @@ func buildRecommendedActions(checks []checkResult) []recommendedAction {
 			cmd = "reposwarm restart api"
 			desc = "Restart the API server"
 		case strings.Contains(c.Message, "NOT SET") && !strings.Contains(c.Name, "Required"):
-			// Missing env var — offer direct set command
-			cmd = fmt.Sprintf("reposwarm config worker-env set %s <value>", c.Name)
-			desc = fmt.Sprintf("Set missing env var: %s", c.Name)
+			// Check if it's a git provider token — suggest config git setup
+			gitTokens := []string{"GITHUB_TOKEN", "GITLAB_TOKEN", "AZURE_DEVOPS_PAT", "BITBUCKET_APP_PASSWORD", "BITBUCKET_USERNAME"}
+			isGitToken := false
+			for _, gt := range gitTokens {
+				if c.Name == gt {
+					isGitToken = true
+					break
+				}
+			}
+			if isGitToken {
+				cmd = "reposwarm config git setup"
+				desc = "Configure git provider and credentials"
+			} else {
+				cmd = fmt.Sprintf("reposwarm config worker-env set %s <value>", c.Name)
+				desc = fmt.Sprintf("Set missing env var: %s", c.Name)
+			}
 		case strings.Contains(c.Name, "Required:") && strings.Contains(c.Message, "NOT SET"):
 			cmd = "reposwarm config provider setup"
 			desc = "Configure provider (sets required env vars)"
@@ -711,6 +724,11 @@ func checkWorkerEnv() []checkResult {
 		checked[entry.Key] = true
 	}
 
+	gitTokenKeys := map[string]bool{
+		"GITHUB_TOKEN": true, "GITLAB_TOKEN": true, "AZURE_DEVOPS_PAT": true,
+		"BITBUCKET_APP_PASSWORD": true, "BITBUCKET_USERNAME": true,
+	}
+
 	for key, desc := range required {
 		if checked[key] {
 			continue
@@ -720,7 +738,11 @@ func checkWorkerEnv() []checkResult {
 		printCheck(c)
 		results = append(results, c)
 		if !flagJSON {
-			fmt.Printf("     Set it: %s\n", output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s <value>", key)))
+			if gitTokenKeys[key] {
+				fmt.Printf("     Configure: %s\n", output.Cyan("reposwarm config git setup"))
+			} else {
+				fmt.Printf("     Set it: %s\n", output.Cyan(fmt.Sprintf("reposwarm config worker-env set %s <value>", key)))
+			}
 		}
 	}
 

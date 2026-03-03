@@ -106,6 +106,19 @@ func LoadProviders() (*ProvidersFile, error) {
 	return cachedProviders, nil
 }
 
+// loadEmbeddedProviders loads from the embedded providers.json only.
+func loadEmbeddedProviders() (*ProvidersFile, error) {
+	data, err := embeddedProviders.ReadFile("providers.json")
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded providers.json: %w", err)
+	}
+	var pf ProvidersFile
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return nil, fmt.Errorf("parsing embedded providers.json: %w", err)
+	}
+	return &pf, nil
+}
+
 // fetchProvidersFromAPI tries to fetch the providers bundle from the API server.
 // Returns nil if the API is unavailable or doesn't support the endpoint.
 func fetchProvidersFromAPI() *ProvidersFile {
@@ -195,8 +208,12 @@ func GetAuthMethods(provider Provider) (map[string]AuthMethodDef, string) {
 // ValidGitProviders returns the list of supported git provider names.
 func ValidGitProviders() []string {
 	pf, err := LoadProviders()
-	if err != nil {
-		return []string{"github", "codecommit", "gitlab", "azure", "bitbucket"}
+	if err != nil || len(pf.GitProviders) == 0 {
+		// API might not have gitProviders yet — use embedded
+		pf, err = loadEmbeddedProviders()
+		if err != nil || len(pf.GitProviders) == 0 {
+			return []string{"github", "codecommit", "gitlab", "azure", "bitbucket"}
+		}
 	}
 	names := make([]string, 0, len(pf.GitProviders))
 	for k := range pf.GitProviders {
@@ -213,7 +230,15 @@ func GetGitProviderBundle(name string) (*GitProviderBundle, error) {
 	}
 	b, ok := pf.GitProviders[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown git provider: %s", name)
+		// API might not have gitProviders yet — try embedded
+		pf, err = loadEmbeddedProviders()
+		if err != nil {
+			return nil, fmt.Errorf("unknown git provider: %s", name)
+		}
+		b, ok = pf.GitProviders[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown git provider: %s", name)
+		}
 	}
 	return &b, nil
 }
