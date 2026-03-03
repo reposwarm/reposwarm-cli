@@ -739,8 +739,11 @@ func checkWorkerLogs() []checkResult {
 	errorPatterns := []string{"error", "Error", "ERROR", "failed", "Failed", "FAILED", "Traceback", "Exception", "ValidationError"}
 	summaryPattern := regexp.MustCompile(`(?i)found \d+ errors? and \d+ warnings?`)
 	envValidationFailed := regexp.MustCompile(`(?i)environment validation failed`)
+	// Match individual validation issue lines like "❌ ERROR: GITHUB_TOKEN not set" or "⚠️ WARNING: ..."
+	validationIssue := regexp.MustCompile(`(?:ERROR|WARNING):\s+(.+)`)
 
 	var errorLines []string
+	var validationIssues []string
 	var workerErrors, workerWarnings int
 
 	for _, line := range logResp.Lines {
@@ -748,10 +751,10 @@ func checkWorkerLogs() []checkResult {
 		if m := regexp.MustCompile(`Found (\d+) errors? and (\d+) warnings?`).FindStringSubmatch(line); len(m) == 3 {
 			fmt.Sscanf(m[1], "%d", &workerErrors)
 			fmt.Sscanf(m[2], "%d", &workerWarnings)
-			continue // Don't count the summary line as an error
+			continue
 		}
 
-		// Skip "ENVIRONMENT VALIDATION FAILED" — it's a summary header, not a distinct error
+		// Skip "ENVIRONMENT VALIDATION FAILED" header
 		if envValidationFailed.MatchString(line) {
 			continue
 		}
@@ -759,6 +762,18 @@ func checkWorkerLogs() []checkResult {
 		// Skip summary lines
 		if summaryPattern.MatchString(line) {
 			continue
+		}
+
+		// Capture individual validation errors/warnings
+		if m := validationIssue.FindStringSubmatch(line); len(m) == 2 {
+			// Extract just the issue text, strip log prefix
+			issue := strings.TrimSpace(m[1])
+			if strings.Contains(line, "ERROR") {
+				validationIssues = append(validationIssues, fmt.Sprintf("✗ %s", issue))
+			} else {
+				validationIssues = append(validationIssues, fmt.Sprintf("⚠ %s", issue))
+			}
+			continue // Don't also count as a generic error line
 		}
 
 		for _, pattern := range errorPatterns {
@@ -769,17 +784,23 @@ func checkWorkerLogs() []checkResult {
 		}
 	}
 
-	if workerErrors > 0 || workerWarnings > 0 {
-		// Use the worker's own validation count — it's more accurate
-		msg := fmt.Sprintf("worker env validation: %s, %s",
+	if workerErrors > 0 || workerWarnings > 0 || len(validationIssues) > 0 {
+		msg := fmt.Sprintf("env validation: %s, %s",
 			pluralizeCount(workerErrors, "error"), pluralizeCount(workerWarnings, "warning"))
-		status := "warn"
-		if workerErrors > 0 {
-			status = "warn"
-		}
-		c := checkResult{"Worker validation", status, msg}
+		c := checkResult{"Worker validation", "warn", msg}
 		printCheck(c)
 		results = append(results, c)
+
+		// Show the actual issues
+		if !flagJSON && len(validationIssues) > 0 {
+			for _, issue := range validationIssues {
+				if strings.HasPrefix(issue, "✗") {
+					fmt.Printf("    %s\n", output.Red(issue))
+				} else {
+					fmt.Printf("    %s\n", output.Yellow(issue))
+				}
+			}
+		}
 	}
 
 	if len(errorLines) > 0 {
