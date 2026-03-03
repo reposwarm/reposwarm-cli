@@ -86,7 +86,7 @@ func newConfigGitSetupCmd() *cobra.Command {
 				return fmt.Errorf("invalid selection: %s", answer)
 			}
 
-			return applyGitProvider(cfg, selected)
+			return applyGitProvider(cfg, selected, reader)
 		},
 	}
 }
@@ -186,12 +186,12 @@ func newConfigGitSetCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			return applyGitProvider(cfg, args[0])
+			return applyGitProvider(cfg, args[0], nil)
 		},
 	}
 }
 
-func applyGitProvider(cfg *config.Config, provider string) error {
+func applyGitProvider(cfg *config.Config, provider string, existingReader *bufio.Reader) error {
 	// Validate
 	b, err := config.GetGitProviderBundle(provider)
 	if err != nil {
@@ -273,7 +273,10 @@ func applyGitProvider(cfg *config.Config, provider string) error {
 	output.F.Info("Configure required credentials:")
 	fmt.Println()
 
-	reader := bufio.NewReader(os.Stdin)
+	reader := existingReader
+	if reader == nil {
+		reader = bufio.NewReader(os.Stdin)
+	}
 	anySet := false
 
 	for _, ev := range b.EnvVars {
@@ -371,7 +374,25 @@ func applyGitProvider(cfg *config.Config, provider string) error {
 
 	if anySet {
 		fmt.Println()
-		output.F.Info("Restart worker to apply changes: " + output.Cyan("reposwarm restart worker"))
+		fmt.Print("  Restart worker to apply changes? [Y/n]: ")
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer == "" || answer == "y" || answer == "yes" {
+			if client != nil {
+				var restartResp any
+				if err := client.Post(ctx(), "/workers/worker-1/restart", nil, &restartResp); err != nil {
+					fmt.Printf("  %s Could not restart: %v\n", output.Yellow("⚠"), err)
+					output.F.Info("Restart manually: " + output.Cyan("reposwarm restart worker"))
+				} else {
+					fmt.Printf("  %s Worker restarting\n", output.Green("✓"))
+				}
+			} else {
+				output.F.Info("No API connection — restart manually: " + output.Cyan("reposwarm restart worker"))
+			}
+		} else {
+			output.F.Info("Remember to restart: " + output.Cyan("reposwarm restart worker"))
+		}
 	}
 
 	return nil

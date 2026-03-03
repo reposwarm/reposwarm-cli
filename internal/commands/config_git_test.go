@@ -411,3 +411,77 @@ func TestConfigGitSwitchProvider(t *testing.T) {
 		t.Errorf("expected GITLAB_TOKEN after switch, got: %s", out)
 	}
 }
+
+func TestConfigGitSetupPromptsRestart(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"/health": map[string]any{"status": "healthy", "version": "1.2.0"},
+		"GET /workers/worker-1/env": map[string]any{
+			"entries": []map[string]any{},
+		},
+		"PUT /workers/worker-1/env/GITHUB_TOKEN": map[string]any{
+			"key": "GITHUB_TOKEN",
+		},
+		"POST /workers/worker-1/restart": map[string]any{
+			"status": "restarting",
+		},
+	})
+	defer cleanup()
+
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	go func() {
+		w.WriteString("4\n")             // select github
+		w.WriteString("ghp_test123\n")   // set GITHUB_TOKEN
+		w.WriteString("y\n")             // yes to restart
+		w.Close()
+	}()
+
+	out, err := runCmd(t, "config", "git", "setup")
+	if err != nil {
+		t.Fatalf("setup failed: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "Restart worker") {
+		t.Errorf("expected restart prompt, got: %s", out)
+	}
+	if !strings.Contains(out, "restarting") || !strings.Contains(out, "Worker") {
+		t.Errorf("expected restart confirmation, got: %s", out)
+	}
+}
+
+func TestConfigGitSetupDeclineRestart(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"/health": map[string]any{"status": "healthy", "version": "1.2.0"},
+		"GET /workers/worker-1/env": map[string]any{
+			"entries": []map[string]any{},
+		},
+		"PUT /workers/worker-1/env/GITHUB_TOKEN": map[string]any{
+			"key": "GITHUB_TOKEN",
+		},
+	})
+	defer cleanup()
+
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	go func() {
+		w.WriteString("4\n")             // select github
+		w.WriteString("ghp_test123\n")   // set GITHUB_TOKEN
+		w.WriteString("n\n")             // no to restart
+		w.Close()
+	}()
+
+	out, err := runCmd(t, "config", "git", "setup")
+	if err != nil {
+		t.Fatalf("setup failed: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "Remember to restart") {
+		t.Errorf("expected 'remember to restart' message, got: %s", out)
+	}
+}
