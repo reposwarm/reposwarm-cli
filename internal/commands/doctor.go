@@ -1004,13 +1004,20 @@ func checkProviderCredentials(priorChecks []checkResult) []checkResult {
 		results = append(results, c)
 	} else {
 		if inferenceResp.Success {
-			c := checkResult{"Inference check", "ok", fmt.Sprintf("working (%dms)", inferenceResp.LatencyMs)}
+			desc := fmt.Sprintf("working (%dms)", inferenceResp.LatencyMs)
+			if inferenceResp.AuthMethod != "" {
+				desc = fmt.Sprintf("working via %s (%dms)", inferenceResp.AuthMethod, inferenceResp.LatencyMs)
+			}
+			c := checkResult{"Inference check", "ok", desc}
 			if !flagJSON {
-				output.Successf("working (%dms)", inferenceResp.LatencyMs)
+				output.Successf("%s", desc)
 			}
 			results = append(results, c)
 		} else {
 			errorMsg := inferenceResp.Error
+			if inferenceResp.AuthMethod != "" {
+				errorMsg = fmt.Sprintf("(auth: %s) %s", inferenceResp.AuthMethod, errorMsg)
+			}
 			if inferenceResp.Hint != "" {
 				errorMsg += " — " + inferenceResp.Hint
 			}
