@@ -15,10 +15,10 @@ const (
 type BedrockAuthMethod string
 
 const (
-	BedrockAuthIAMRole  BedrockAuthMethod = "iam-role"   // EC2 instance profile / ECS task role
-	BedrockAuthAPIKeys  BedrockAuthMethod = "api-keys"   // AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
-	BedrockAuthSSO      BedrockAuthMethod = "sso"        // AWS SSO / Identity Center
-	BedrockAuthProfile  BedrockAuthMethod = "profile"    // Named AWS profile (~/.aws/credentials)
+	BedrockAuthIAMRole      BedrockAuthMethod = "iam-role"        // EC2 instance profile / ECS task role
+	BedrockAuthLongTermKeys BedrockAuthMethod = "long-term-keys"  // AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+	BedrockAuthSSO          BedrockAuthMethod = "sso"             // AWS SSO / Identity Center
+	BedrockAuthProfile      BedrockAuthMethod = "profile"         // Named AWS profile (~/.aws/credentials)
 )
 
 // ValidProviders returns all supported provider names from the bundle.

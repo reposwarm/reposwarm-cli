@@ -33,6 +33,29 @@ var serviceMap = map[string]serviceInfo{
 	"temporal": {Dir: "temporal", PIDFile: "", Port: func(c *Config) string { return c.TemporalPort }},
 }
 
+// serviceRepoURL returns the git clone URL for a service, or "" if unknown.
+func serviceRepoURL(service string, cfg *Config) string {
+	switch service {
+	case "api":
+		if cfg.APIRepoURL != "" {
+			return cfg.APIRepoURL
+		}
+		return "https://github.com/reposwarm/reposwarm-api.git"
+	case "worker":
+		if cfg.WorkerRepoURL != "" {
+			return cfg.WorkerRepoURL
+		}
+		return "https://github.com/reposwarm/reposwarm.git"
+	case "ui":
+		if cfg.UIRepoURL != "" {
+			return cfg.UIRepoURL
+		}
+		return "https://github.com/reposwarm/reposwarm-ui.git"
+	default:
+		return ""
+	}
+}
+
 // IsLocalInstall checks whether a local installation exists at the given directory.
 func IsLocalInstall(installDir string) bool {
 	// Check if at least the api or worker subdirectory exists
@@ -107,7 +130,37 @@ func LocalStart(installDir string, service string, cfg *Config) error {
 
 	svcDir := filepath.Join(installDir, info.Dir)
 	if _, err := os.Stat(svcDir); os.IsNotExist(err) {
-		return fmt.Errorf("%s directory not found at %s (run 'reposwarm new --local' first)", service, svcDir)
+		// Try to auto-clone the missing service
+		repoURL := serviceRepoURL(service, cfg)
+		if repoURL != "" {
+			fmt.Printf("  ℹ %s not found, cloning from %s...\n", service, repoURL)
+			os.MkdirAll(installDir, 0755)
+			cloneCmd := exec.Command("git", "clone", repoURL, info.Dir)
+			cloneCmd.Dir = installDir
+			if out, err := cloneCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("auto-clone failed: %w\n%s\nRun 'reposwarm new --local' to set up manually", err, string(out))
+			}
+			// Run npm install for Node.js services
+			if service == "api" || service == "ui" {
+				fmt.Printf("  ℹ Installing %s dependencies...\n", service)
+				npmCmd := exec.Command("npm", "install")
+				npmCmd.Dir = svcDir
+				if out, err := npmCmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("npm install failed: %w\n%s", err, string(out))
+				}
+				// Build for API
+				if service == "api" {
+					fmt.Printf("  ℹ Building %s...\n", service)
+					buildCmd := exec.Command("npm", "run", "build")
+					buildCmd.Dir = svcDir
+					if out, err := buildCmd.CombinedOutput(); err != nil {
+						return fmt.Errorf("npm build failed: %w\n%s", err, string(out))
+					}
+				}
+			}
+		} else {
+			return fmt.Errorf("%s directory not found at %s (run 'reposwarm new --local' first)", service, svcDir)
+		}
 	}
 
 	// Check if already running

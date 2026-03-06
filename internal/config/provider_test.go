@@ -137,10 +137,10 @@ func TestRequiredEnvVars(t *testing.T) {
 			expected: []string{"CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "ANTHROPIC_MODEL"},
 		},
 		{
-			name: "Bedrock with API keys",
+			name: "Bedrock with long-term keys",
 			config: &ProviderConfig{
 				Provider:    ProviderBedrock,
-				BedrockAuth: BedrockAuthAPIKeys,
+				BedrockAuth: BedrockAuthLongTermKeys,
 			},
 			expected: []string{"CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "ANTHROPIC_MODEL",
 				"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"},
@@ -270,10 +270,10 @@ func TestValidateWorkerEnv(t *testing.T) {
 			expectValid: false,
 		},
 		{
-			name: "Bedrock API keys all set",
+			name: "Bedrock long-term keys all set",
 			config: &ProviderConfig{
 				Provider:    ProviderBedrock,
-				BedrockAuth: BedrockAuthAPIKeys,
+				BedrockAuth: BedrockAuthLongTermKeys,
 			},
 			currentEnv: map[string]string{
 				"CLAUDE_CODE_USE_BEDROCK": "1",
@@ -285,10 +285,10 @@ func TestValidateWorkerEnv(t *testing.T) {
 			expectValid: true,
 		},
 		{
-			name: "Bedrock API keys missing secret",
+			name: "Bedrock long-term keys missing secret",
 			config: &ProviderConfig{
 				Provider:    ProviderBedrock,
-				BedrockAuth: BedrockAuthAPIKeys,
+				BedrockAuth: BedrockAuthLongTermKeys,
 			},
 			currentEnv: map[string]string{
 				"CLAUDE_CODE_USE_BEDROCK": "1",
