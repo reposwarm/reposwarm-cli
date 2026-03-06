@@ -278,6 +278,8 @@ func localStartAPI(installDir string, cfg *Config) error {
 		fmt.Sprintf("DYNAMODB_TABLE=%s", orDefaultStr(cfg.DynamoDBTable, "reposwarm-cache")),
 		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("API_BEARER_TOKEN=%s", token),
+		"AWS_ACCESS_KEY_ID=local",
+		"AWS_SECRET_ACCESS_KEY=local",
 	)
 	if err := startCmd.Start(); err != nil {
 		logFile.Close()
@@ -323,6 +325,8 @@ func localStartWorker(installDir string, cfg *Config) error {
 		"TEMPORAL_TASK_QUEUE=investigate-task-queue",
 		fmt.Sprintf("AWS_REGION=%s", orDefaultStr(cfg.Region, "us-east-1")),
 		fmt.Sprintf("DYNAMODB_TABLE=%s", orDefaultStr(cfg.DynamoDBTable, "reposwarm-cache")),
+		fmt.Sprintf("DYNAMODB_TABLE_NAME=%s", orDefaultStr(cfg.DynamoDBTable, "reposwarm-cache")),
+		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("DEFAULT_MODEL=%s", orDefaultStr(cfg.DefaultModel, "us.anthropic.claude-sonnet-4-6")),
 	)
 	// Add provider-specific env vars (CLAUDE_CODE_USE_BEDROCK, CLAUDE_PROVIDER, etc.)

@@ -276,6 +276,8 @@ AWS_REGION=%s
 DYNAMODB_TABLE=%s
 API_BEARER_TOKEN=%s
 DYNAMODB_ENDPOINT=http://localhost:8000
+AWS_ACCESS_KEY_ID=local
+AWS_SECRET_ACCESS_KEY=local
 `, cfg.APIPort, cfg.TemporalPort, cfg.Region, cfg.DynamoDBTable, token)
 
 	if err := os.WriteFile(filepath.Join(apiDir, ".env"), []byte(envContent), 0600); err != nil {
@@ -307,6 +309,8 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 		fmt.Sprintf("DYNAMODB_TABLE=%s", cfg.DynamoDBTable),
 		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("API_BEARER_TOKEN=%s", token),
+		"AWS_ACCESS_KEY_ID=local",
+		"AWS_SECRET_ACCESS_KEY=local",
 	}
 	startCmd.Env = append(os.Environ(), apiEnv...)
 	log.Env(apiEnv)
@@ -372,8 +376,15 @@ TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=investigate-task-queue
 AWS_REGION=%s
 DYNAMODB_TABLE=%s
+DYNAMODB_TABLE_NAME=%s
+DYNAMODB_ENDPOINT=http://localhost:8000
 DEFAULT_MODEL=%s
-`, cfg.TemporalPort, cfg.Region, cfg.DynamoDBTable, cfg.DefaultModel)
+`, cfg.TemporalPort, cfg.Region, cfg.DynamoDBTable, cfg.DynamoDBTable, cfg.DefaultModel)
+
+	// Append provider env vars (CLAUDE_CODE_USE_BEDROCK, CLAUDE_PROVIDER, AWS_BEARER_TOKEN_BEDROCK, etc.)
+	for k, v := range cfg.ProviderEnvVars {
+		envContent += fmt.Sprintf("%s=%s\n", k, v)
+	}
 
 	if err := os.WriteFile(filepath.Join(workerDir, ".env"), []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
@@ -407,7 +418,13 @@ DEFAULT_MODEL=%s
 		"TEMPORAL_TASK_QUEUE=investigate-task-queue",
 		fmt.Sprintf("AWS_REGION=%s", cfg.Region),
 		fmt.Sprintf("DYNAMODB_TABLE=%s", cfg.DynamoDBTable),
+		fmt.Sprintf("DYNAMODB_TABLE_NAME=%s", cfg.DynamoDBTable),
+		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("DEFAULT_MODEL=%s", cfg.DefaultModel),
+	}
+	// Add provider env vars (CLAUDE_CODE_USE_BEDROCK, CLAUDE_PROVIDER, AWS_BEARER_TOKEN_BEDROCK, etc.)
+	for k, v := range cfg.ProviderEnvVars {
+		workerEnv = append(workerEnv, fmt.Sprintf("%s=%s", k, v))
 	}
 	startCmd.Env = append(os.Environ(), workerEnv...)
 	log.Env(workerEnv)

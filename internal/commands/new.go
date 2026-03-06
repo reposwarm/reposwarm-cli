@@ -79,16 +79,20 @@ Examples:
 					if err != nil {
 						return output.JSON(result)
 					}
-					// Persist installDir so 'start/stop/restart' find it
+					// Persist installDir + token so 'start/stop/restart' find it
 					cliCfg.InstallDir = dir
+					cliCfg.APIUrl = fmt.Sprintf("http://localhost:%s/v1", bsCfg.APIPort)
+					cliCfg.APIToken = result.Token
 					_ = config.Save(cliCfg)
 					return output.JSON(result)
 				}
 				if flagAgent {
 					printer := &fmtPrinter{}
-					_, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
+					result, err := bootstrap.SetupLocal(env, dir, bsCfg, printer)
 					if err == nil {
 						cliCfg.InstallDir = dir
+						cliCfg.APIUrl = fmt.Sprintf("http://localhost:%s/v1", bsCfg.APIPort)
+						cliCfg.APIToken = result.Token
 						_ = config.Save(cliCfg)
 					}
 					return err
@@ -111,8 +115,10 @@ Examples:
 					return err
 				}
 
-				// Persist installDir so 'start/stop/restart' find the right directory
+				// Persist installDir + token so 'start/stop/restart' find the right directory
 				cliCfg.InstallDir = dir
+				cliCfg.APIUrl = fmt.Sprintf("http://localhost:%s/v1", bsCfg.APIPort)
+				cliCfg.APIToken = result.Token
 				_ = config.Save(cliCfg)
 
 				// ── Post-setup: Provider configuration ──
