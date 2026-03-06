@@ -229,9 +229,9 @@ func TestRequiredEnvVarsWithGit(t *testing.T) {
 			wantAbsent:  []string{"GITHUB_TOKEN", "GITLAB_TOKEN"},
 		},
 		{
-			name:        "bedrock + long-term-keys + azure",
+			name:        "bedrock + api-keys + azure",
 			provider:    ProviderBedrock,
-			authMethod:  BedrockAuthLongTermKeys,
+			authMethod:  BedrockAuthAPIKeys,
 			gitProvider: "azure",
 			wantKeys:    []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AZURE_DEVOPS_PAT", "AZURE_DEVOPS_ORG"},
 		},
