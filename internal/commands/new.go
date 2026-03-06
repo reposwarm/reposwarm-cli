@@ -31,7 +31,7 @@ and optionally hands it to a coding agent (Claude Code, Codex, etc.) for
 interactive setup.
 
 Use --local to automatically set up and start all services locally
-(Temporal, API, Worker, UI) via Docker Compose and npm/pip.
+(Temporal, API, Worker, UI) via Docker Compose using pre-built images.
 
 Examples:
   reposwarm new                    # Interactive setup in ./reposwarm
@@ -560,15 +560,17 @@ func showPlanAndConfirm(plan *bootstrap.Plan, env *bootstrap.Environment, force 
 	// What it needs
 	fmt.Printf("  %s\n", output.Bold("📦 What's included"))
 	fmt.Println()
-	fmt.Printf("     • 3 Docker containers  %s\n", output.Dim("(Temporal + PostgreSQL + DynamoDB Local)"))
-	fmt.Printf("     • API server           %s\n", output.Dim("(Node.js)"))
-	fmt.Printf("     • Python worker        %s\n", output.Dim("(handles investigations)"))
-	fmt.Printf("     • Web UI               %s\n", output.Dim("(Next.js dev server)"))
+	fmt.Printf("     • 7 Docker containers  %s\n", output.Dim("(all services run as containers)"))
+	fmt.Printf("     • API server           %s\n", output.Dim("(ghcr.io/reposwarm/api)"))
+	fmt.Printf("     • Worker               %s\n", output.Dim("(ghcr.io/reposwarm/worker)"))
+	fmt.Printf("     • Web UI               %s\n", output.Dim("(ghcr.io/reposwarm/ui)"))
+	fmt.Printf("     • Temporal + PostgreSQL %s\n", output.Dim("(workflow engine)"))
+	fmt.Printf("     • DynamoDB Local       %s\n", output.Dim("(cache store)"))
 	fmt.Println()
 
 	// Timing note
-	fmt.Printf("  %s %s\n", output.Yellow("⏱"), output.Dim("First run takes 5-8 minutes (Docker pulls + Temporal schema setup)."))
-	fmt.Printf("    %s\n", output.Dim("Subsequent runs are much faster."))
+	fmt.Printf("  %s %s\n", output.Yellow("⏱"), output.Dim("First run takes 3-5 minutes (Docker image pulls + Temporal schema setup)."))
+	fmt.Printf("    %s\n", output.Dim("Subsequent runs start in seconds."))
 	fmt.Println()
 
 	if force {

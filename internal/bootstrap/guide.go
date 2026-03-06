@@ -36,14 +36,12 @@ func GenerateGuide(env *Environment, installDir string, cfg *Config) string {
 	}
 
 	sb.WriteString("### Required\n")
-	sb.WriteString("- Docker & Docker Compose (for Temporal)\n")
-	sb.WriteString("- Node.js 22+ (for API server & UI)\n")
-	sb.WriteString("- Python 3.11+ (for worker)\n")
+	sb.WriteString("- Docker & Docker Compose (all services run as containers)\n")
 	sb.WriteString("- Git\n\n")
 
 	sb.WriteString("### Optional\n")
 	sb.WriteString("- AWS CLI (for CodeCommit repo discovery)\n")
-	sb.WriteString("- Go 1.24+ (for CLI development)\n\n")
+	sb.WriteString("- Go 1.24+ (for CLI development only)\n\n")
 
 	// Temporal
 	sb.WriteString("## Temporal Server\n\n")

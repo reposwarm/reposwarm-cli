@@ -40,10 +40,8 @@ func PlanFromConfig(cfg *Config, installDir string) *Plan {
 func (p *Plan) Steps() []string {
 	return []string{
 		fmt.Sprintf("Create install directory at %s", p.InstallDir),
-		fmt.Sprintf("Start Docker containers (Temporal + PostgreSQL + DynamoDB Local)"),
-		fmt.Sprintf("Clone and build the API server from %s", p.APIRepoURL),
-		fmt.Sprintf("Clone and set up the Python worker from %s", p.WorkerRepoURL),
-		fmt.Sprintf("Clone and start the UI from %s", p.UIRepoURL),
+		"Pull Docker images (API, Worker, UI, Temporal, PostgreSQL, DynamoDB Local)",
+		"Start all services via Docker Compose",
 		"Configure the CLI to use your local API",
 		"Verify everything is healthy",
 	}
