@@ -328,8 +328,8 @@ func getComposeDir(cfg *config.Config) string {
 	// Try default locations
 	home, _ := os.UserHomeDir()
 	for _, candidate := range []string{
+		filepath.Join(home, ".reposwarm", "temporal"),
 		filepath.Join(home, "reposwarm", "temporal"),
-		filepath.Join(home, "repo", "repos", "reposwarm", "temporal"),
 	} {
 		if _, err := os.Stat(filepath.Join(candidate, "docker-compose.yml")); err == nil {
 			return candidate

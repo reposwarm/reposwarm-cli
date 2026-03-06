@@ -144,7 +144,11 @@ func (e *Environment) MissingDeps() []string {
 
 // InstallDir returns the target installation directory.
 func (e *Environment) InstallDir() string {
-	return filepath.Join(e.WorkDir, "reposwarm")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(e.WorkDir, ".reposwarm")
+	}
+	return filepath.Join(home, ".reposwarm")
 }
 
 func cmdExists(name string) bool {

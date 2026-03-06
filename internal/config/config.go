@@ -110,7 +110,7 @@ func (c *Config) EffectiveAPIPort() string {
 func (c *Config) EffectiveInstallDir() string {
 	if c.InstallDir != "" { return c.InstallDir }
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "reposwarm")
+	return filepath.Join(home, ".reposwarm")
 }
 
 func (c *Config) EffectiveUIPort() string {

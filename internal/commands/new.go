@@ -34,7 +34,7 @@ Use --local to automatically set up and start all services locally
 (Temporal, API, Worker, UI) via Docker Compose using pre-built images.
 
 Examples:
-  reposwarm new                    # Interactive setup in ./reposwarm
+  reposwarm new                    # Interactive setup in ~/.reposwarm
   reposwarm new --local            # Automated local setup (start everything)
   reposwarm new --dir ~/projects   # Custom install directory
   reposwarm new --agent            # Auto-launch coding agent
@@ -282,7 +282,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&dir, "dir", "", "Installation directory (default: ./reposwarm)")
+	cmd.Flags().StringVar(&dir, "dir", "", "Installation directory (default: ~/.reposwarm)")
 	cmd.Flags().BoolVar(&agentMode, "agent", false, "Auto-launch coding agent for installation")
 	cmd.Flags().BoolVar(&forceMode, "force", false, "Destroy existing install without prompting")
 	cmd.Flags().BoolVar(&guideOnly, "guide-only", false, "Only generate guide files, don't prompt")
