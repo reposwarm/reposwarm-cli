@@ -44,6 +44,17 @@ Examples:
 				component = args[0]
 			}
 
+			// For local installations, default to "all" when no component specified
+			if len(args) == 0 {
+				cfg, cfgErr := config.Load()
+				if cfgErr == nil && isLocalInstall(cfg) {
+					component = "all"
+					if !flagJSON && !flagAgent {
+						output.Infof("Local installation detected — upgrading all components")
+					}
+				}
+			}
+
 			switch component {
 			case "cli", "":
 				return upgradeCLI(currentVersion, force)
@@ -361,6 +372,16 @@ func downloadBinary(url string) (string, error) {
 	os.Chmod(tmp.Name(), 0755)
 
 	return tmp.Name(), nil
+}
+
+// isLocalInstall checks if the current config points to a local installation
+// (InstallDir is set, or API URL points to localhost).
+func isLocalInstall(cfg *config.Config) bool {
+	if cfg.InstallDir != "" {
+		return true
+	}
+	url := cfg.APIUrl
+	return strings.Contains(url, "localhost") || strings.Contains(url, "127.0.0.1")
 }
 
 // safeReplaceBinary replaces the binary without corrupting the running process.
