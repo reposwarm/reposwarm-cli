@@ -93,6 +93,7 @@ Get started:
 	root.AddCommand(newRestartCmd())
 	root.AddCommand(newStopCmd())
 	root.AddCommand(newStartCmd())
+	root.AddCommand(newDebugLogsCmd())
 
 	// Results (includes diff, report as subcommands; show→sections)
 	root.AddCommand(newResultsCmd())

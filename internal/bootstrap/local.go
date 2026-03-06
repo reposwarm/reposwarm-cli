@@ -58,16 +58,38 @@ type Printer interface {
 func SetupLocal(env *Environment, installDir string, cfg *Config, printer Printer) (*LocalSetupResult, error) {
 	result := &LocalSetupResult{InstallDir: installDir}
 
+	// Initialize install log
+	log := NewInstallLog(installDir)
+	defer func() {
+		log.Close()
+		printer.Printf("\n  📄 Full install log: %s\n\n", log.Path())
+	}()
+
+	// Log config
+	log.Section("Configuration")
+	log.Info(fmt.Sprintf("installDir: %s", installDir))
+	log.Info(fmt.Sprintf("region: %s", cfg.Region))
+	log.Info(fmt.Sprintf("model: %s", cfg.DefaultModel))
+	log.Info(fmt.Sprintf("apiPort: %s", cfg.APIPort))
+	log.Info(fmt.Sprintf("uiPort: %s", cfg.UIPort))
+	log.Info(fmt.Sprintf("temporalPort: %s", cfg.TemporalPort))
+	log.Info(fmt.Sprintf("workerRepoURL: %s", cfg.WorkerRepoURL))
+	log.Info(fmt.Sprintf("apiRepoURL: %s", cfg.APIRepoURL))
+	log.Info(fmt.Sprintf("uiRepoURL: %s", cfg.UIRepoURL))
+
 	// Step 0: Check prerequisites
+	log.Section("Prerequisites")
 	printer.Section("Checking prerequisites")
 	if missing := env.MissingDeps(); len(missing) > 0 {
 		for _, dep := range missing {
 			printer.Error(fmt.Sprintf("Missing: %s", dep))
+			log.Error(fmt.Sprintf("Missing prerequisite: %s", dep))
 		}
 		result.Steps = append(result.Steps, LocalStepResult{"prerequisites", "fail", "missing: " + strings.Join(missing, ", ")})
 		return result, fmt.Errorf("missing prerequisites: %s — install them first", strings.Join(missing, ", "))
 	}
 	printer.Success("All prerequisites found")
+	log.Success("All prerequisites found")
 	result.Steps = append(result.Steps, LocalStepResult{"prerequisites", "ok", ""})
 
 	// Generate a bearer token for local auth
@@ -87,24 +109,27 @@ func SetupLocal(env *Environment, installDir string, cfg *Config, printer Printe
 	result.Steps = append(result.Steps, LocalStepResult{"directories", "ok", installDir})
 
 	// Step 2: Start Temporal
+	log.Section("Temporal Setup")
 	printer.Section("Starting Temporal (Docker Compose)")
-	if err := setupTemporal(installDir, cfg, printer); err != nil {
+	if err := setupTemporal(installDir, cfg, printer, log); err != nil {
 		result.Steps = append(result.Steps, LocalStepResult{"temporal", "fail", err.Error()})
 		return result, fmt.Errorf("temporal setup: %w", err)
 	}
 	result.Steps = append(result.Steps, LocalStepResult{"temporal", "ok", fmt.Sprintf("http://localhost:%s", cfg.TemporalUIPort)})
 
 	// Step 3: Clone and start API
+	log.Section("API Setup")
 	printer.Section("Setting up API server")
-	if err := setupAPI(installDir, cfg, token, printer); err != nil {
+	if err := setupAPI(installDir, cfg, token, printer, log); err != nil {
 		result.Steps = append(result.Steps, LocalStepResult{"api", "fail", err.Error()})
 		return result, fmt.Errorf("API setup: %w", err)
 	}
 	result.Steps = append(result.Steps, LocalStepResult{"api", "ok", fmt.Sprintf("http://localhost:%s", cfg.APIPort)})
 
 	// Step 4: Clone and start Worker
+	log.Section("Worker Setup")
 	printer.Section("Setting up Worker")
-	if err := setupWorker(installDir, cfg, printer); err != nil {
+	if err := setupWorker(installDir, cfg, printer, log); err != nil {
 		printer.Warning(fmt.Sprintf("Worker setup failed: %s (investigations won't run, but API/UI will work)", err))
 		result.Steps = append(result.Steps, LocalStepResult{"worker", "fail", err.Error()})
 		// Don't return error — worker is optional for basic functionality
@@ -113,8 +138,9 @@ func SetupLocal(env *Environment, installDir string, cfg *Config, printer Printe
 	}
 
 	// Step 5: Clone and start UI
+	log.Section("UI Setup")
 	printer.Section("Setting up UI")
-	if err := setupUI(installDir, cfg, printer); err != nil {
+	if err := setupUI(installDir, cfg, printer, log); err != nil {
 		printer.Warning(fmt.Sprintf("UI setup failed: %s (CLI still works)", err))
 		result.Steps = append(result.Steps, LocalStepResult{"ui", "fail", err.Error()})
 	} else {
@@ -177,7 +203,7 @@ func killProcessOnPort(port string) {
 	// Give it a moment to release the port
 	time.Sleep(500 * time.Millisecond)
 }
-func setupTemporal(installDir string, cfg *Config, printer Printer) error {
+func setupTemporal(installDir string, cfg *Config, printer Printer, log *InstallLog) error {
 	temporalDir := filepath.Join(installDir, "temporal")
 	if err := os.MkdirAll(temporalDir, 0755); err != nil {
 		return err
@@ -188,11 +214,10 @@ func setupTemporal(installDir string, cfg *Config, printer Printer) error {
 		return fmt.Errorf("writing docker-compose.yml: %w", err)
 	}
 	printer.Info("Wrote docker-compose.yml")
+	log.Info("Wrote docker-compose.yml to " + composePath)
 
 	// docker compose up -d
-	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = temporalDir
-	out, err := cmd.CombinedOutput()
+	out, err := log.RunCmd(temporalDir, "docker", "compose", "up", "-d")
 	if err != nil {
 		return fmt.Errorf("docker compose up failed: %w\n%s", err, string(out))
 	}
@@ -200,45 +225,44 @@ func setupTemporal(installDir string, cfg *Config, printer Printer) error {
 
 	// Wait for Temporal to be ready (up to 60s)
 	printer.Info("Waiting for Temporal to be ready (first run may take up to 5 minutes for schema setup)...")
+	log.Info("Waiting for Temporal on port " + cfg.TemporalUIPort)
 	if err := waitForHTTP(fmt.Sprintf("http://localhost:%s/api/v1/namespaces", cfg.TemporalUIPort), 300*time.Second); err != nil {
 		// Check container status for debugging
-		statusCmd := exec.Command("docker", "compose", "ps", "--format", "{{.Name}}\t{{.Status}}")
-		statusCmd.Dir = temporalDir
-		statusOut, _ := statusCmd.CombinedOutput()
+		statusOut, _ := log.RunCmd(temporalDir, "docker", "compose", "ps", "--format", "{{.Name}}\t{{.Status}}")
 		return fmt.Errorf("temporal not ready after 300s: %w\nContainer status:\n%s", err, string(statusOut))
 	}
 	printer.Success("Temporal is ready")
+	log.Success("Temporal is ready")
 	return nil
 }
 
-func setupAPI(installDir string, cfg *Config, token string, printer Printer) error {
+func setupAPI(installDir string, cfg *Config, token string, printer Printer, log *InstallLog) error {
 	apiDir := filepath.Join(installDir, "api")
 
 	// Clone
 	if _, err := os.Stat(apiDir); os.IsNotExist(err) {
 		printer.Info("Cloning API server...")
-		cmd := exec.Command("git", "clone", cfg.APIRepoURL, "api")
-		cmd.Dir = installDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		log.Info("Cloning " + cfg.APIRepoURL)
+		out, err := log.RunCmd(installDir, "git", "clone", cfg.APIRepoURL, "api")
+		if err != nil {
 			return fmt.Errorf("git clone failed: %w\n%s", err, string(out))
 		}
 	} else {
 		printer.Info("API directory exists, skipping clone")
+		log.Info("API directory exists, skipping clone")
 	}
 
 	// npm install
 	printer.Info("Installing dependencies...")
-	npmInstall := exec.Command("npm", "install")
-	npmInstall.Dir = apiDir
-	if out, err := npmInstall.CombinedOutput(); err != nil {
+	out, err := log.RunCmd(apiDir, "npm", "install")
+	if err != nil {
 		return fmt.Errorf("npm install failed: %w\n%s", err, string(out))
 	}
 
 	// npm run build
 	printer.Info("Building...")
-	npmBuild := exec.Command("npm", "run", "build")
-	npmBuild.Dir = apiDir
-	if out, err := npmBuild.CombinedOutput(); err != nil {
+	out, err = log.RunCmd(apiDir, "npm", "run", "build")
+	if err != nil {
 		return fmt.Errorf("npm build failed: %w\n%s", err, string(out))
 	}
 
@@ -256,12 +280,14 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 	if err := os.WriteFile(filepath.Join(apiDir, ".env"), []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
+	log.Info("Wrote .env file")
 
 	// Kill any existing process on the API port
 	killProcessOnPort(cfg.APIPort)
 
 	// Start API in background
 	printer.Info("Starting API server...")
+	log.Info("Starting API on port " + cfg.APIPort)
 	logFile, err := os.Create(filepath.Join(apiDir, "api.log"))
 	if err != nil {
 		return fmt.Errorf("creating log file: %w", err)
@@ -271,8 +297,7 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 	startCmd.Dir = apiDir
 	startCmd.Stdout = logFile
 	startCmd.Stderr = logFile
-	// Pass env vars explicitly since API doesn't use dotenv
-	startCmd.Env = append(os.Environ(),
+	apiEnv := []string{
 		fmt.Sprintf("PORT=%s", cfg.APIPort),
 		fmt.Sprintf("TEMPORAL_SERVER_URL=localhost:%s", cfg.TemporalPort),
 		"TEMPORAL_NAMESPACE=default",
@@ -281,7 +306,9 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 		fmt.Sprintf("DYNAMODB_TABLE=%s", cfg.DynamoDBTable),
 		"DYNAMODB_ENDPOINT=http://localhost:8000",
 		fmt.Sprintf("API_BEARER_TOKEN=%s", token),
-	)
+	}
+	startCmd.Env = append(os.Environ(), apiEnv...)
+	log.Env(apiEnv)
 	if err := startCmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("starting API: %w", err)
@@ -298,29 +325,30 @@ DYNAMODB_ENDPOINT=http://localhost:8000
 		return fmt.Errorf("API not ready after 30s: %w", err)
 	}
 	printer.Success("API server is ready")
+	log.Success("API server is ready (PID " + fmt.Sprintf("%d", startCmd.Process.Pid) + ")")
 	return nil
 }
 
-func setupWorker(installDir string, cfg *Config, printer Printer) error {
+func setupWorker(installDir string, cfg *Config, printer Printer, log *InstallLog) error {
 	workerDir := filepath.Join(installDir, "worker")
 
 	// Clone
 	if _, err := os.Stat(workerDir); os.IsNotExist(err) {
 		printer.Info("Cloning worker...")
-		cmd := exec.Command("git", "clone", cfg.WorkerRepoURL, "worker")
-		cmd.Dir = installDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		log.Info("Cloning " + cfg.WorkerRepoURL)
+		out, err := log.RunCmd(installDir, "git", "clone", cfg.WorkerRepoURL, "worker")
+		if err != nil {
 			return fmt.Errorf("git clone failed: %w\n%s", err, string(out))
 		}
 	} else {
 		printer.Info("Worker directory exists, skipping clone")
+		log.Info("Worker directory exists, skipping clone")
 	}
 
 	// Create venv
 	printer.Info("Creating Python virtual environment...")
-	venvCmd := exec.Command("python3", "-m", "venv", ".venv")
-	venvCmd.Dir = workerDir
-	if out, err := venvCmd.CombinedOutput(); err != nil {
+	out, err := log.RunCmd(workerDir, "python3", "-m", "venv", ".venv")
+	if err != nil {
 		return fmt.Errorf("venv creation failed: %w\n%s", err, string(out))
 	}
 
@@ -328,15 +356,12 @@ func setupWorker(installDir string, cfg *Config, printer Printer) error {
 	printer.Info("Installing Python dependencies...")
 	pipPath := filepath.Join(workerDir, ".venv", "bin", "pip")
 	reqFile := filepath.Join(workerDir, "requirements.txt")
-	var pipCmd *exec.Cmd
 	if _, err := os.Stat(reqFile); err == nil {
-		pipCmd = exec.Command(pipPath, "install", "-r", "requirements.txt")
+		out, err = log.RunCmd(workerDir, pipPath, "install", "-r", "requirements.txt")
 	} else {
-		// Fall back to pyproject.toml (editable install)
-		pipCmd = exec.Command(pipPath, "install", "-e", ".")
+		out, err = log.RunCmd(workerDir, pipPath, "install", "-e", ".")
 	}
-	pipCmd.Dir = workerDir
-	if out, err := pipCmd.CombinedOutput(); err != nil {
+	if err != nil {
 		return fmt.Errorf("pip install failed: %w\n%s", err, string(out))
 	}
 
@@ -352,6 +377,7 @@ DEFAULT_MODEL=%s
 	if err := os.WriteFile(filepath.Join(workerDir, ".env"), []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
+	log.Info("Wrote worker .env file")
 
 	// Kill any existing worker process
 	killProcessOnPort(cfg.TemporalPort) // workers connect to temporal, not a specific port
@@ -369,19 +395,21 @@ DEFAULT_MODEL=%s
 	if _, err := os.Stat(filepath.Join(workerDir, "src")); err == nil {
 		workerModule = "src.worker"
 	}
+	log.Info("Worker module: " + workerModule)
 	startCmd := exec.Command(pythonPath, "-m", workerModule)
 	startCmd.Dir = workerDir
 	startCmd.Stdout = logFile
 	startCmd.Stderr = logFile
-	// Pass env vars explicitly since .env isn't auto-loaded
-	startCmd.Env = append(os.Environ(),
+	workerEnv := []string{
 		fmt.Sprintf("TEMPORAL_SERVER_URL=localhost:%s", cfg.TemporalPort),
 		"TEMPORAL_NAMESPACE=default",
 		"TEMPORAL_TASK_QUEUE=investigate-task-queue",
 		fmt.Sprintf("AWS_REGION=%s", cfg.Region),
 		fmt.Sprintf("DYNAMODB_TABLE=%s", cfg.DynamoDBTable),
 		fmt.Sprintf("DEFAULT_MODEL=%s", cfg.DefaultModel),
-	)
+	}
+	startCmd.Env = append(os.Environ(), workerEnv...)
+	log.Env(workerEnv)
 	if err := startCmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("starting worker: %w", err)
@@ -392,29 +420,30 @@ DEFAULT_MODEL=%s
 	os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", startCmd.Process.Pid)), 0644)
 
 	printer.Success("Worker started")
+	log.Success("Worker started (PID " + fmt.Sprintf("%d", startCmd.Process.Pid) + ")")
 	return nil
 }
 
-func setupUI(installDir string, cfg *Config, printer Printer) error {
+func setupUI(installDir string, cfg *Config, printer Printer, log *InstallLog) error {
 	uiDir := filepath.Join(installDir, "ui")
 
 	// Clone
 	if _, err := os.Stat(uiDir); os.IsNotExist(err) {
 		printer.Info("Cloning UI...")
-		cmd := exec.Command("git", "clone", cfg.UIRepoURL, "ui")
-		cmd.Dir = installDir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		log.Info("Cloning " + cfg.UIRepoURL)
+		out, err := log.RunCmd(installDir, "git", "clone", cfg.UIRepoURL, "ui")
+		if err != nil {
 			return fmt.Errorf("git clone failed: %w\n%s", err, string(out))
 		}
 	} else {
 		printer.Info("UI directory exists, skipping clone")
+		log.Info("UI directory exists, skipping clone")
 	}
 
 	// npm install
 	printer.Info("Installing dependencies...")
-	npmInstall := exec.Command("npm", "install")
-	npmInstall.Dir = uiDir
-	if out, err := npmInstall.CombinedOutput(); err != nil {
+	out, err := log.RunCmd(uiDir, "npm", "install")
+	if err != nil {
 		return fmt.Errorf("npm install failed: %w\n%s", err, string(out))
 	}
 
@@ -423,12 +452,14 @@ func setupUI(installDir string, cfg *Config, printer Printer) error {
 	if err := os.WriteFile(filepath.Join(uiDir, ".env.local"), []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("writing .env.local: %w", err)
 	}
+	log.Info("Wrote UI .env.local")
 
 	// Kill any existing process on the UI port
 	killProcessOnPort(cfg.UIPort)
 
 	// Start UI in background
 	printer.Info("Starting UI dev server...")
+	log.Info("Starting UI on port " + cfg.UIPort)
 	logFile, err := os.Create(filepath.Join(uiDir, "ui.log"))
 	if err != nil {
 		return fmt.Errorf("creating log file: %w", err)
@@ -451,9 +482,11 @@ func setupUI(installDir string, cfg *Config, printer Printer) error {
 	printer.Info("Waiting for UI to be ready...")
 	if err := waitForHTTP(fmt.Sprintf("http://localhost:%s", cfg.UIPort), 30*time.Second); err != nil {
 		printer.Warning("UI not responding yet — it may still be compiling (check ui/ui.log)")
+		log.Warning("UI not responding after 30s")
 		return nil // Non-fatal
 	}
 	printer.Success("UI is ready")
+	log.Success("UI is ready (PID " + fmt.Sprintf("%d", startCmd.Process.Pid) + ")")
 	return nil
 }
 
