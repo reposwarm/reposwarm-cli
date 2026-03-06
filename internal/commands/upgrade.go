@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,22 +23,28 @@ func newUpgradeCmd(currentVersion string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "upgrade [component]",
 		Aliases: []string{"update"},
-		Short:   "Upgrade RepoSwarm components (cli, api, ui, all)",
+		Short:   "Upgrade RepoSwarm components (cli, api, ui, worker, all)",
 		Long: `Upgrade RepoSwarm components to their latest versions.
 
 Components:
   cli  (default)  Upgrade the CLI binary from GitHub releases
-  api             Pull latest API server code and restart
-  ui              Pull latest UI code and restart
-  all             Upgrade CLI + API + UI
+  api             Pull latest API Docker image and restart
+  ui              Pull latest UI Docker image and restart
+  worker          Pull latest Worker Docker image and restart
+  all             Upgrade CLI + all Docker services
+
+For local installations (Docker Compose), upgrading api/ui/worker pulls
+the latest images from ghcr.io/reposwarm/* and recreates the containers.
+
+For remote installations, checks version compatibility between the CLI
+and the running services.
 
 Examples:
-  reposwarm upgrade           # Upgrade CLI only
-  reposwarm upgrade cli       # Same as above
-  reposwarm upgrade api       # Pull latest API + restart
-  reposwarm upgrade ui        # Pull latest UI + restart
-  reposwarm upgrade all       # Upgrade everything
-  reposwarm upgrade --force   # Reinstall even if same version`,
+  reposwarm upgrade           # Upgrade CLI only (or all if local)
+  reposwarm upgrade cli       # Upgrade CLI binary
+  reposwarm upgrade api       # Pull latest API image + restart
+  reposwarm upgrade all       # Upgrade CLI + all Docker services
+  reposwarm upgrade --force   # Force pull even if up to date`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			component := "cli"
 			if len(args) > 0 {
@@ -58,29 +65,24 @@ Examples:
 			switch component {
 			case "cli", "":
 				return upgradeCLI(currentVersion, force)
-			case "api":
-				return upgradeService("api", force)
-			case "ui":
-				return upgradeService("ui", force)
+			case "api", "ui", "worker":
+				return upgradeDockerService(component, force)
 			case "all":
 				if err := upgradeCLI(currentVersion, force); err != nil {
 					output.F.Warning(fmt.Sprintf("CLI upgrade failed: %v", err))
 				}
-				if err := upgradeService("api", force); err != nil {
-					output.F.Warning(fmt.Sprintf("API upgrade failed: %v", err))
-				}
-				if err := upgradeService("ui", force); err != nil {
-					output.F.Warning(fmt.Sprintf("UI upgrade failed: %v", err))
+				if err := upgradeDockerServices(force); err != nil {
+					output.F.Warning(fmt.Sprintf("Service upgrade failed: %v", err))
 				}
 				return nil
 			default:
-				return fmt.Errorf("unknown component: %s (use: cli, api, ui, all)", component)
+				return fmt.Errorf("unknown component: %s (use: cli, api, ui, worker, all)", component)
 			}
 		},
-		ValidArgs: []string{"cli", "api", "ui", "all"},
+		ValidArgs: []string{"cli", "api", "ui", "worker", "all"},
 	}
 
-	cmd.Flags().BoolVar(&force, "force", false, "Reinstall even if same version")
+	cmd.Flags().BoolVar(&force, "force", false, "Force pull even if up to date")
 	return cmd
 }
 
@@ -155,10 +157,126 @@ func upgradeCLI(currentVersion string, force bool) error {
 	return nil
 }
 
-// upgradeService pulls latest code for api/ui and restarts.
-func upgradeService(svc string, force bool) error {
+// upgradeDockerService pulls latest Docker image for a single service and recreates it.
+func upgradeDockerService(svc string, force bool) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if !isLocalInstall(cfg) {
+		return checkRemoteCompatibility(svc)
+	}
+
+	return pullAndRestart(cfg, svc, force)
+}
+
+// upgradeDockerServices pulls latest images for all services and recreates them.
+func upgradeDockerServices(force bool) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if !isLocalInstall(cfg) {
+		return checkRemoteCompatibility("all")
+	}
+
+	composeDir := getComposeDir(cfg)
+	if composeDir == "" {
+		return fmt.Errorf("cannot find docker-compose.yml — was this installed with 'reposwarm new --local'?")
+	}
+
+	if !flagJSON {
+		output.F.Section("Upgrading Docker Services")
+	}
+
+	// Pull all images
+	if !flagJSON {
+		output.Infof("Pulling latest images...")
+	}
+	pullArgs := []string{"compose", "pull"}
+	if force {
+		pullArgs = append(pullArgs, "--ignore-pull-failures")
+	}
+	pullCmd := exec.Command("docker", pullArgs...)
+	pullCmd.Dir = composeDir
+	pullOut, err := pullCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose pull failed: %w\n%s", err, string(pullOut))
+	}
+
+	// Recreate containers with new images
+	if !flagJSON {
+		output.Infof("Recreating containers...")
+	}
+	upCmd := exec.Command("docker", "compose", "up", "-d", "--remove-orphans")
+	upCmd.Dir = composeDir
+	upOut, err := upCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose up failed: %w\n%s", err, string(upOut))
+	}
+
+	if flagJSON {
+		return output.JSON(map[string]any{
+			"action":   "upgrade",
+			"services": []string{"api", "worker", "ui"},
+			"status":   "updated",
+		})
+	}
+
+	output.F.Success("All services updated to latest images")
+	output.Infof("Containers recreated with latest images from ghcr.io/reposwarm/*")
+	return nil
+}
+
+// pullAndRestart pulls latest image for a specific service and recreates it.
+func pullAndRestart(cfg *config.Config, svc string, force bool) error {
+	composeDir := getComposeDir(cfg)
+	if composeDir == "" {
+		return fmt.Errorf("cannot find docker-compose.yml — was this installed with 'reposwarm new --local'?")
+	}
+
 	if !flagJSON {
 		output.F.Section(fmt.Sprintf("Upgrading %s", strings.ToUpper(svc)))
+		output.Infof("Pulling latest image for %s...", svc)
+	}
+
+	// Pull the specific service image
+	pullCmd := exec.Command("docker", "compose", "pull", svc)
+	pullCmd.Dir = composeDir
+	pullOut, err := pullCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose pull %s failed: %w\n%s", svc, err, string(pullOut))
+	}
+
+	// Recreate just this service
+	if !flagJSON {
+		output.Infof("Recreating %s container...", svc)
+	}
+	upCmd := exec.Command("docker", "compose", "up", "-d", "--no-deps", svc)
+	upCmd.Dir = composeDir
+	upOut, err := upCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose up %s failed: %w\n%s", svc, err, string(upOut))
+	}
+
+	if flagJSON {
+		return output.JSON(map[string]any{
+			"action":  "upgrade",
+			"service": svc,
+			"status":  "updated",
+		})
+	}
+
+	output.F.Success(fmt.Sprintf("%s updated to latest image", strings.ToUpper(svc)))
+	return nil
+}
+
+// checkRemoteCompatibility checks version compatibility between CLI and remote services.
+func checkRemoteCompatibility(svc string) error {
+	if !flagJSON {
+		output.F.Section("Version Compatibility Check")
 	}
 
 	client, err := getClient()
@@ -166,51 +284,58 @@ func upgradeService(svc string, force bool) error {
 		return fmt.Errorf("connecting to API: %w", err)
 	}
 
-	// Call POST /services/:name/upgrade (API implements git pull + restart)
-	var resp struct {
-		OldVersion string `json:"oldVersion"`
-		NewVersion string `json:"newVersion"`
-		Updated    bool   `json:"updated"`
-		Restarted  bool   `json:"restarted"`
-		Message    string `json:"message"`
+	var health struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
 	}
-
-	if err := client.Post(ctx(), fmt.Sprintf("/services/%s/upgrade", svc), map[string]bool{"force": force}, &resp); err != nil {
-		// If the API doesn't have the upgrade endpoint yet, fall back to manual steps
-		if !flagJSON {
-			output.F.Warning(fmt.Sprintf("API server doesn't support /services/%s/upgrade yet", svc))
-			output.F.Info("Upgrade manually:")
-			fmt.Println()
-			cfg, cfgErr := config.Load()
-			installDir := "/opt/reposwarm"
-			if cfgErr == nil && cfg.InstallDir != "" {
-				installDir = cfg.InstallDir
-			}
-			fmt.Printf("  cd %s/%s && git pull && npm install && npm run build\n", installDir, svc)
-			fmt.Printf("  reposwarm restart %s\n\n", svc)
-		}
-		return err
+	if err := client.Get(ctx(), "/health", &health); err != nil {
+		return fmt.Errorf("cannot reach API: %w", err)
 	}
 
 	if flagJSON {
-		return output.JSON(resp)
+		return output.JSON(map[string]any{
+			"mode":       "remote",
+			"apiVersion": health.Version,
+			"note":       "Remote services are managed by their deployment pipeline. Use docker compose pull to upgrade Docker-based deployments.",
+		})
 	}
 
-	if resp.Updated {
-		if resp.OldVersion != "" && resp.NewVersion != "" {
-			output.Successf("%s upgraded: v%s → v%s", strings.ToUpper(svc), resp.OldVersion, resp.NewVersion)
-		} else {
-			output.Successf("%s upgraded to latest", strings.ToUpper(svc))
-		}
-	} else {
-		output.Successf("%s already up to date", strings.ToUpper(svc))
+	if flagAgent {
+		fmt.Printf("Remote API version: %s. Services are managed by deployment pipeline, not CLI upgrade.\n", health.Version)
+		return nil
 	}
 
-	if resp.Restarted {
-		output.Successf("%s restarted", strings.ToUpper(svc))
-	}
+	output.Infof("API version: %s", health.Version)
+	fmt.Println()
+	output.Infof("Remote services are managed by their deployment pipeline.")
+	output.Infof("To upgrade a Docker-based remote deployment:")
+	fmt.Println()
+	fmt.Printf("  cd <deploy-dir> && docker compose pull && docker compose up -d\n\n")
+	output.Infof("The CLI only upgrades local Docker Compose installations.")
+	output.Infof("Use 'reposwarm upgrade cli' to upgrade the CLI binary itself.")
 
 	return nil
+}
+
+// getComposeDir finds the docker-compose.yml directory for a local installation.
+func getComposeDir(cfg *config.Config) string {
+	if cfg.InstallDir != "" {
+		dir := filepath.Join(cfg.InstallDir, "temporal")
+		if _, err := os.Stat(filepath.Join(dir, "docker-compose.yml")); err == nil {
+			return dir
+		}
+	}
+	// Try default locations
+	home, _ := os.UserHomeDir()
+	for _, candidate := range []string{
+		filepath.Join(home, "reposwarm", "temporal"),
+		filepath.Join(home, "repo", "repos", "reposwarm", "temporal"),
+	} {
+		if _, err := os.Stat(filepath.Join(candidate, "docker-compose.yml")); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 type ghRelease struct {
