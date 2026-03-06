@@ -56,6 +56,12 @@
             "envVars": [
               { "key": "AWS_BEARER_TOKEN_BEDROCK", "desc": "Bedrock API key", "required": true, "secret": true }
             ]
+          },
+          "sso": {
+            "label": "AWS SSO / Identity Center",
+            "envVars": [
+              { "key": "AWS_PROFILE", "desc": "AWS SSO profile name", "required": true }
+            ]
           }
         },
         "defaultAuthMethod": "iam-role"
