@@ -1,7 +1,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 env:
@@ -9,6 +11,7 @@ env:
 
 jobs:
   release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,9 +29,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building v$VERSION"
 
-      - name: Test
-        run: go test ./... -count=1
-
       - name: Build all targets
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -43,18 +43,13 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          # Get the previous release tag
           PREV_TAG=$(gh release list --limit 2 --json tagName -q '.[1].tagName' 2>/dev/null || echo "")
           VERSION="${{ steps.version.outputs.version }}"
-
           if [ -n "$PREV_TAG" ]; then
-            # Get commit messages between previous release and HEAD
             CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"• %s" --no-merges | head -30)
           else
             CHANGES=$(git log --pretty=format:"• %s" --no-merges -10)
           fi
-
-          # Write to file (multiline safe)
           {
             echo "## What's Changed"
             echo ""
@@ -64,7 +59,6 @@ jobs:
             echo "Install: \`curl -fsSL https://raw.githubusercontent.com/reposwarm/reposwarm-cli/main/install.sh | sh\`"
             echo "Upgrade: \`reposwarm upgrade\`"
           } > /tmp/release-notes.md
-
           cat /tmp/release-notes.md
         env:
           GH_TOKEN: ${{ github.token }}
