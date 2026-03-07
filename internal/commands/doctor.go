@@ -905,20 +905,36 @@ func checkProviderCredentials(priorChecks []checkResult) []checkResult {
 	provider := cfg.EffectiveProvider()
 	pc := cfg.ProviderConfig
 
-	// Fetch worker env for validation
-	var envResp struct {
-		Entries []struct {
-			Key   string `json:"key"`
-			Value string `json:"value"`
-			Set   bool   `json:"set"`
-		} `json:"entries"`
-	}
+	// Fetch worker env for validation — use worker.env file for Docker installs, API for source installs
+	isDockerEnv := cfg.IsDockerInstall() || bootstrap.IsDockerInstall(cfg.EffectiveInstallDir())
 
 	currentEnv := make(map[string]string)
-	if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
-		for _, e := range envResp.Entries {
-			if e.Set {
-				currentEnv[e.Key] = e.Value
+	if isDockerEnv {
+		workerEnv, _ := bootstrap.ReadWorkerEnvFile(cfg.EffectiveInstallDir())
+		containerEnv, _ := bootstrap.DockerServiceEnv(cfg.EffectiveInstallDir(), "worker")
+		for k, v := range workerEnv {
+			if v != "" {
+				currentEnv[k] = v
+			}
+		}
+		for k, v := range containerEnv {
+			if v != "" {
+				currentEnv[k] = v
+			}
+		}
+	} else {
+		var envResp struct {
+			Entries []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+				Set   bool   `json:"set"`
+			} `json:"entries"`
+		}
+		if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
+			for _, e := range envResp.Entries {
+				if e.Set {
+					currentEnv[e.Key] = e.Value
+				}
 			}
 		}
 	}
