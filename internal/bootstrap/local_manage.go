@@ -229,7 +229,21 @@ func LocalStop(installDir string, service string, cfg *Config) error {
 
 // LocalRestart stops then starts a service.
 func LocalRestart(installDir string, service string, cfg *Config) error {
-	// Stop (ignore errors — might not be running)
+	// Check if this is a Docker Compose install
+	composePath := filepath.Join(installDir, "temporal", "docker-compose.yml")
+	if _, err := os.Stat(composePath); err == nil {
+		// Docker install: use docker compose up -d --force-recreate
+		// (not "restart" — restart doesn't re-read env_file changes)
+		composeDir := filepath.Join(installDir, "temporal")
+		cmd := exec.Command("docker", "compose", "up", "-d", "--force-recreate", service)
+		cmd.Dir = composeDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("docker compose recreate failed: %w\n%s", err, string(out))
+		}
+		return nil
+	}
+
+	// Source-based install: stop then start
 	LocalStop(installDir, service, cfg)
 	time.Sleep(1 * time.Second)
 	return LocalStart(installDir, service, cfg)
