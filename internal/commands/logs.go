@@ -122,7 +122,7 @@ If no service is specified, shows logs from all services.`,
 }
 
 func showDockerLogs(installDir string, args []string, lines int, tail bool) error {
-	composeDir := filepath.Join(installDir, "temporal")
+	composeDir := filepath.Join(installDir, config.ComposeSubDir)
 	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
 		return fmt.Errorf("docker-compose.yml not found at %s", composeDir)
 	}

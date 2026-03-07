@@ -178,7 +178,7 @@ func killProcessOnPort(port string) {
 	time.Sleep(500 * time.Millisecond)
 }
 func setupDocker(installDir string, cfg *Config, token string, printer Printer, log *InstallLog) error {
-	temporalDir := filepath.Join(installDir, "temporal")
+	temporalDir := filepath.Join(installDir, ComposeSubDir)
 	if err := os.MkdirAll(temporalDir, 0755); err != nil {
 		return err
 	}
@@ -603,8 +603,11 @@ func verifyServices(cfg *Config, printer Printer) LocalStepResult {
 // TemporalComposeLocal returns the docker-compose YAML for local development.
 // Uses postgres instead of the deprecated sqlite driver.
 func TemporalComposeLocal() string {
-	return `services:
+	return `name: reposwarm
+
+services:
   postgres:
+    container_name: reposwarm-postgres
     image: postgres:16-alpine
     ports:
       - "5432:5432"
@@ -620,6 +623,7 @@ func TemporalComposeLocal() string {
       - temporal-data:/var/lib/postgresql/data
 
   temporal:
+    container_name: reposwarm-temporal
     image: temporalio/auto-setup:latest
     ports:
       - "7233:7233"
@@ -636,6 +640,7 @@ func TemporalComposeLocal() string {
         condition: service_healthy
 
   temporal-ui:
+    container_name: reposwarm-temporal-ui
     image: temporalio/ui:latest
     ports:
       - "8233:8080"
@@ -645,6 +650,7 @@ func TemporalComposeLocal() string {
       - temporal
 
   dynamodb-local:
+    container_name: reposwarm-dynamodb
     image: amazon/dynamodb-local:latest
     ports:
       - "8000:8000"
@@ -653,6 +659,7 @@ func TemporalComposeLocal() string {
       - dynamodb-data:/home/dynamodblocal/data
 
   api:
+    container_name: reposwarm-api
     image: ghcr.io/reposwarm/api:latest
     ports:
       - "${API_PORT:-3000}:3000"
@@ -682,6 +689,7 @@ func TemporalComposeLocal() string {
       retries: 5
 
   worker:
+    container_name: reposwarm-worker
     image: ghcr.io/reposwarm/worker:latest
     env_file:
       - path: ./worker.env
@@ -703,6 +711,7 @@ func TemporalComposeLocal() string {
       - dynamodb-local
 
   ui:
+    container_name: reposwarm-ui
     image: ghcr.io/reposwarm/ui:latest
     ports:
       - "${UI_PORT:-3001}:3000"
@@ -716,6 +725,7 @@ func TemporalComposeLocal() string {
         condition: service_healthy
 
   askbox:
+    container_name: reposwarm-askbox
     image: ghcr.io/reposwarm/askbox:latest
     environment:
       - ASKBOX_ADAPTER=${ASKBOX_ADAPTER:-claude-agent-sdk}

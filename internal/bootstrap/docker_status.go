@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// ComposeSubDir is the subdirectory within installDir for docker-compose.yml.
+const ComposeSubDir = "temporal"
+
 // DockerService represents a Docker Compose service status.
 type DockerService struct {
 	Name    string `json:"Name"`
@@ -36,14 +39,14 @@ type dockerServiceJSON struct {
 
 // IsDockerInstall checks if the install dir has a docker-compose.yml.
 func IsDockerInstall(installDir string) bool {
-	composePath := filepath.Join(installDir, "temporal", "docker-compose.yml")
+	composePath := filepath.Join(installDir, ComposeSubDir, "docker-compose.yml")
 	_, err := os.Stat(composePath)
 	return err == nil
 }
 
 // DockerComposeServices returns the status of all Docker Compose services.
 func DockerComposeServices(installDir string) ([]DockerService, error) {
-	composeDir := filepath.Join(installDir, "temporal")
+	composeDir := filepath.Join(installDir, ComposeSubDir)
 	cmd := exec.Command("docker", "compose", "ps", "--format", "json", "-a")
 	cmd.Dir = composeDir
 	out, err := cmd.CombinedOutput()
@@ -84,7 +87,7 @@ func DockerComposeServices(installDir string) ([]DockerService, error) {
 
 // DockerServiceEnv reads env vars from a running Docker Compose service.
 func DockerServiceEnv(installDir, service string) (map[string]string, error) {
-	composeDir := filepath.Join(installDir, "temporal")
+	composeDir := filepath.Join(installDir, ComposeSubDir)
 	cmd := exec.Command("docker", "compose", "exec", "-T", service, "env")
 	cmd.Dir = composeDir
 	out, err := cmd.CombinedOutput()
@@ -103,7 +106,7 @@ func DockerServiceEnv(installDir, service string) (map[string]string, error) {
 
 // ReadWorkerEnvFile reads the worker.env file from the install directory.
 func ReadWorkerEnvFile(installDir string) (map[string]string, error) {
-	envPath := filepath.Join(installDir, "temporal", "worker.env")
+	envPath := filepath.Join(installDir, ComposeSubDir, "worker.env")
 	cmd := exec.Command("cat", envPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -121,4 +124,26 @@ func ReadWorkerEnvFile(installDir string) (map[string]string, error) {
 		}
 	}
 	return env, nil
+}
+
+// CleanupOldProjectContainers removes containers from the old "temporal" project name.
+// This handles the migration from the old naming (temporal-api-1, temporal-worker-1, etc.)
+// to the new "reposwarm" project name (reposwarm-api, reposwarm-worker, etc.).
+func CleanupOldProjectContainers() {
+	// List containers with old "temporal" project label
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "label=com.docker.compose.project=temporal", "-q").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return
+	}
+
+	ids := strings.Fields(strings.TrimSpace(string(out)))
+	if len(ids) > 0 {
+		args := append([]string{"rm", "-f"}, ids...)
+		exec.Command("docker", args...).Run()
+	}
+
+	// Also remove old volumes
+	for _, vol := range []string{"temporal_temporal-data", "temporal_dynamodb-data", "temporal_config-data", "temporal_askbox-output", "temporal_askbox-arch-hub"} {
+		exec.Command("docker", "volume", "rm", "-f", vol).Run()
+	}
 }

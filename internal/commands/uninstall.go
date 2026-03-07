@@ -102,7 +102,7 @@ Examples:
 				}
 
 				// 2. Docker compose down (Temporal)
-				temporalDir := filepath.Join(installDir, "temporal")
+				temporalDir := filepath.Join(installDir, config.ComposeSubDir)
 				composePath := filepath.Join(temporalDir, "docker-compose.yml")
 				if fileExists(composePath) {
 					fmt.Print("  Stopping Temporal containers... ")
@@ -183,7 +183,7 @@ func buildRemovalList(installDir string, isLocal bool, keepConfig bool) []string
 
 	if isLocal {
 		items = append(items, fmt.Sprintf("Services: stop API, worker, UI processes"))
-		temporalDir := filepath.Join(installDir, "temporal")
+		temporalDir := filepath.Join(installDir, config.ComposeSubDir)
 		if dirExists(temporalDir) {
 			items = append(items, "Temporal: docker compose down + remove volumes")
 		}

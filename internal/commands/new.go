@@ -506,13 +506,16 @@ func isServiceUp(url string) bool {
 }
 
 func teardownExisting(dir string) {
-	// Stop docker compose
-	temporalDir := filepath.Join(dir, "temporal")
+	// Stop docker compose (handles both old "temporal" and new "reposwarm" project names)
+	temporalDir := filepath.Join(dir, config.ComposeSubDir)
 	if _, err := os.Stat(filepath.Join(temporalDir, "docker-compose.yml")); err == nil {
+		// Try new project name first
 		cmd := exec.Command("docker", "compose", "down", "-v")
 		cmd.Dir = temporalDir
 		cmd.Run()
-		output.F.Info("  Temporal containers stopped")
+		// Also clean up old "temporal" project containers if they exist
+		bootstrap.CleanupOldProjectContainers()
+		output.F.Info("  Containers stopped")
 	}
 
 	// Kill processes from PID files

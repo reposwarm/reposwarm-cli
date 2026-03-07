@@ -29,6 +29,10 @@ const (
 
 	CLIReleasesAPI  = APIBaseURL + "/" + GitHubCLIRepo + "/releases"
 	CLIReleasesURL  = DefaultCLIRepoURL + "/releases"
+
+	// Docker Compose constants.
+	ComposeProjectName = "reposwarm"  // Docker Compose project name (container prefix)
+	ComposeSubDir      = "temporal"   // Subdirectory within installDir for docker-compose.yml
 )
 
 // Config holds all CLI configuration.

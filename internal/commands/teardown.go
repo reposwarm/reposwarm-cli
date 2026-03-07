@@ -49,7 +49,7 @@ Examples:
 				return fmt.Errorf("no Docker Compose installation found at %s", installDir)
 			}
 
-			composeDir := filepath.Join(installDir, "temporal")
+			composeDir := filepath.Join(installDir, config.ComposeSubDir)
 			composePath := filepath.Join(composeDir, "docker-compose.yml")
 			if _, err := os.Stat(composePath); err != nil {
 				return fmt.Errorf("docker-compose.yml not found at %s\nRun 'reposwarm new --local' to set up", composePath)
@@ -133,6 +133,8 @@ Examples:
 				fmt.Printf("\n%s\n", string(downOut))
 				return fmt.Errorf("docker compose down failed: %w", err)
 			}
+			// Clean up containers from old "temporal" project name (migration)
+			bootstrap.CleanupOldProjectContainers()
 			fmt.Println(output.Green("done"))
 
 			fmt.Println()

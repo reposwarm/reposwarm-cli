@@ -320,7 +320,7 @@ func checkRemoteCompatibility(svc string) error {
 // getComposeDir finds the docker-compose.yml directory for a local installation.
 func getComposeDir(cfg *config.Config) string {
 	if cfg.InstallDir != "" {
-		dir := filepath.Join(cfg.InstallDir, "temporal")
+		dir := filepath.Join(cfg.InstallDir, config.ComposeSubDir)
 		if _, err := os.Stat(filepath.Join(dir, "docker-compose.yml")); err == nil {
 			return dir
 		}
@@ -328,8 +328,8 @@ func getComposeDir(cfg *config.Config) string {
 	// Try default locations
 	home, _ := os.UserHomeDir()
 	for _, candidate := range []string{
-		filepath.Join(home, ".reposwarm", "temporal"),
-		filepath.Join(home, "reposwarm", "temporal"),
+		filepath.Join(home, ".reposwarm", config.ComposeSubDir),
+		filepath.Join(home, "reposwarm", config.ComposeSubDir),
 	} {
 		if _, err := os.Stat(filepath.Join(candidate, "docker-compose.yml")); err == nil {
 			return candidate

@@ -81,7 +81,7 @@ func LocalServiceStatus(installDir string, service string, cfg *Config) (*Servic
 
 	if service == "temporal" {
 		// Check docker compose
-		temporalDir := filepath.Join(installDir, "temporal")
+		temporalDir := filepath.Join(installDir, ComposeSubDir)
 		cmd := exec.Command("docker", "compose", "ps", "--format", "{{.State}}")
 		cmd.Dir = temporalDir
 		out, err := cmd.CombinedOutput()
@@ -186,7 +186,7 @@ func LocalStart(installDir string, service string, cfg *Config) error {
 // LocalStop stops a locally running service.
 func LocalStop(installDir string, service string, cfg *Config) error {
 	if service == "temporal" {
-		temporalDir := filepath.Join(installDir, "temporal")
+		temporalDir := filepath.Join(installDir, ComposeSubDir)
 		cmd := exec.Command("docker", "compose", "stop")
 		cmd.Dir = temporalDir
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -230,11 +230,11 @@ func LocalStop(installDir string, service string, cfg *Config) error {
 // LocalRestart stops then starts a service.
 func LocalRestart(installDir string, service string, cfg *Config) error {
 	// Check if this is a Docker Compose install
-	composePath := filepath.Join(installDir, "temporal", "docker-compose.yml")
+	composePath := filepath.Join(installDir, ComposeSubDir, "docker-compose.yml")
 	if _, err := os.Stat(composePath); err == nil {
 		// Docker install: use docker compose up -d --force-recreate
 		// (not "restart" — restart doesn't re-read env_file changes)
-		composeDir := filepath.Join(installDir, "temporal")
+		composeDir := filepath.Join(installDir, ComposeSubDir)
 		cmd := exec.Command("docker", "compose", "up", "-d", "--force-recreate", service)
 		cmd.Dir = composeDir
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -250,7 +250,7 @@ func LocalRestart(installDir string, service string, cfg *Config) error {
 }
 
 func localStartTemporal(installDir string, cfg *Config) error {
-	temporalDir := filepath.Join(installDir, "temporal")
+	temporalDir := filepath.Join(installDir, ComposeSubDir)
 	composePath := filepath.Join(temporalDir, "docker-compose.yml")
 	if _, err := os.Stat(composePath); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose.yml not found at %s", composePath)
