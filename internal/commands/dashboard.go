@@ -152,17 +152,24 @@ func renderDashboard(client *api.Client, focusRepo string) error {
 			}
 		}
 
-		if w.Status != "Running" && currentStep == "" {
-			if w.Status == "Completed" {
+		// If all investigation steps are done, show as Completed
+		// (Temporal may still show Running during cleanup/arch-hub save)
+		effectiveStatus := w.Status
+		if completed >= total && total > 0 {
+			effectiveStatus = "Completed"
+		}
+
+		if effectiveStatus != "Running" && currentStep == "" {
+			if effectiveStatus == "Completed" {
 				currentStep = "Done"
 			} else {
-				currentStep = w.Status
+				currentStep = effectiveStatus
 			}
 		}
 
 		rows = append(rows, dashRow{
 			Repo:       name,
-			Status:     w.Status,
+			Status:     effectiveStatus,
 			Completed:  completed,
 			Total:      total,
 			Current:    currentStep,

@@ -66,6 +66,20 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			question := strings.Join(args, " ")
 
+			// Check if standalone ask CLI is installed — prefer it for all queries
+			askPath, askErr := exec.LookPath("ask")
+			if askErr == nil {
+				// ask CLI found — forward to it
+				if !flagJSON && !flagAgent {
+					fmt.Fprintf(os.Stderr, "💡 Forwarding to ask CLI — you can use it directly next time: ask %q\n\n", question)
+				}
+				askCmd := exec.Command(askPath, question)
+				askCmd.Stdout = os.Stdout
+				askCmd.Stderr = os.Stderr
+				askCmd.Stdin = os.Stdin
+				return askCmd.Run()
+			}
+
 			if archFlag {
 				// Deprecation notice
 				if !flagJSON && !flagAgent {
@@ -104,6 +118,29 @@ Examples:
 
 			client, err := getClient()
 			if err != nil {
+				// API unreachable and no ask CLI — offer to install
+				if !flagJSON && !flagAgent {
+					fmt.Fprintf(os.Stderr, "❌ Cannot connect to API server.\n\n")
+					fmt.Fprintf(os.Stderr, "💡 Install the standalone ask CLI for architecture queries:\n")
+					fmt.Fprintf(os.Stderr, "   curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh\n")
+					fmt.Fprintf(os.Stderr, "   ask setup    # Configure provider & start askbox\n")
+					fmt.Fprintf(os.Stderr, "   ask %q\n", question)
+
+					reader := bufio.NewReader(os.Stdin)
+					fmt.Fprintf(os.Stderr, "\n Install ask CLI now? [Y/n]: ")
+					answer, _ := reader.ReadString('\n')
+					answer = strings.TrimSpace(strings.ToLower(answer))
+					if answer == "" || answer == "y" || answer == "yes" {
+						installCmd := exec.Command("sh", "-c", "curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh")
+						installCmd.Stdout = os.Stdout
+						installCmd.Stderr = os.Stderr
+						if iErr := installCmd.Run(); iErr != nil {
+							return fmt.Errorf("install failed: %w", iErr)
+						}
+						fmt.Fprintf(os.Stderr, "\n✅ Installed! Run: ask setup\n")
+						return nil
+					}
+				}
 				return err
 			}
 
