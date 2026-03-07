@@ -98,6 +98,15 @@ Examples:
 						cliCfg.APIUrl = fmt.Sprintf("http://localhost:%s/v1", bsCfg.APIPort)
 						cliCfg.APIToken = result.Token
 						_ = config.Save(cliCfg)
+
+						fmt.Println()
+						fmt.Println("OK: RepoSwarm local environment is running!")
+						fmt.Println()
+						fmt.Printf("  Temporal UI:  http://localhost:%s\n", bsCfg.TemporalUIPort)
+						fmt.Printf("  API Server:   http://localhost:%s\n", bsCfg.APIPort)
+						fmt.Printf("  UI:           http://localhost:%s\n", bsCfg.UIPort)
+						fmt.Println()
+						fmt.Printf("  API Token:    %s\n", result.Token)
 					}
 					return err
 				}

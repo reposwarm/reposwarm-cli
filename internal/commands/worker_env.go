@@ -240,10 +240,14 @@ func newWorkerEnvSetCmd() *cobra.Command {
 					if cfgErr == nil && bootstrap.IsDockerInstall(cfgR.EffectiveInstallDir()) {
 						composeDir := filepath.Join(cfgR.EffectiveInstallDir(), bootstrap.ComposeSubDir)
 						output.F.Info("Restarting worker...")
+						// Stop first to avoid container rename collision
+						stopCmd := osexec.Command("docker", "compose", "stop", "worker")
+						stopCmd.Dir = composeDir
+						stopCmd.CombinedOutput() // ignore error if already stopped
 						restartCmd := osexec.Command("docker", "compose", "up", "-d", "--force-recreate", "worker")
 						restartCmd.Dir = composeDir
-						if _, err := restartCmd.CombinedOutput(); err != nil {
-							output.F.Warning(fmt.Sprintf("Could not restart: %v", err))
+						if out, err := restartCmd.CombinedOutput(); err != nil {
+							output.F.Warning(fmt.Sprintf("Could not restart: %v (%s)", err, string(out)))
 						} else {
 							output.Successf("Worker restarted")
 						}

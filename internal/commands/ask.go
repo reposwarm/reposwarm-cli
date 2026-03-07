@@ -67,17 +67,20 @@ Examples:
 			question := strings.Join(args, " ")
 
 			// Check if standalone ask CLI is installed — prefer it for all queries
-			askPath, askErr := exec.LookPath("ask")
-			if askErr == nil {
-				// ask CLI found — forward to it
-				if !flagJSON && !flagAgent {
-					fmt.Fprintf(os.Stderr, "💡 Forwarding to ask CLI — you can use it directly next time: ask %q\n\n", question)
+			// (only for non-arch queries; arch mode uses internal implementation)
+			if !archFlag {
+				askPath, askErr := exec.LookPath("ask")
+				if askErr == nil {
+					// ask CLI found — forward to it
+					if !flagJSON && !flagAgent {
+						fmt.Fprintf(os.Stderr, "💡 Forwarding to ask CLI — you can use it directly next time: ask %q\n\n", question)
+					}
+					askCmd := exec.Command(askPath, question)
+					askCmd.Stdout = os.Stdout
+					askCmd.Stderr = os.Stderr
+					askCmd.Stdin = os.Stdin
+					return askCmd.Run()
 				}
-				askCmd := exec.Command(askPath, question)
-				askCmd.Stdout = os.Stdout
-				askCmd.Stderr = os.Stderr
-				askCmd.Stdin = os.Stdin
-				return askCmd.Run()
 			}
 
 			if archFlag {
