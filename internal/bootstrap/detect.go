@@ -133,11 +133,6 @@ func (e *Environment) MissingDeps() []string {
 	if !e.HasGit {
 		missing = append(missing, "git")
 	}
-	if e.HasPython && !e.HasPythonVenv {
-		missing = append(missing, "python3-venv (apt install python3-venv)")
-	}
-	if !e.HasGit {
-		missing = append(missing, "git")
 	}
 	return missing
 }
