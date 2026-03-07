@@ -151,7 +151,7 @@ reposwarm results list --for-agent
 ## Step 6: Install Ask CLI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh
 ask version
 ```
 

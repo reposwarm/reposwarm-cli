@@ -70,7 +70,7 @@ Examples:
 				// Deprecation notice
 				if !flagJSON && !flagAgent {
 					fmt.Fprintf(os.Stderr, "💡 Tip: Architecture queries are moving to the standalone `ask` CLI.\n")
-					fmt.Fprintf(os.Stderr, "   Install: curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh\n")
+					fmt.Fprintf(os.Stderr, "   Install: curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh\n")
 					fmt.Fprintf(os.Stderr, "   Usage:   ask %q\n\n", question)
 				}
 

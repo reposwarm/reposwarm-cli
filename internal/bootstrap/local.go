@@ -158,7 +158,7 @@ func SetupLocal(env *Environment, installDir string, cfg *Config, printer Printe
 	printer.Printf("    reposwarm investigate is-odd\n")
 	printer.Printf("\n")
 	printer.Printf("  📖 To query architecture results, install the ask CLI:\n")
-	printer.Printf("    curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh\n")
+	printer.Printf("    curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh\n")
 	printer.Printf("    ask setup    # Uses your RepoSwarm provider config\n")
 	printer.Printf("\n")
 

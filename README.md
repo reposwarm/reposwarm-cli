@@ -378,13 +378,13 @@ reposwarm results audit
 
 ### 📖 Query Architecture Results — `ask` CLI
 
-Architecture querying has moved to the standalone [`ask`](https://github.com/reposwarm/ask) CLI.
+Architecture querying has moved to the standalone [`ask`](https://github.com/reposwarm/ask-cli) CLI.
 
 **RepoSwarm writes** architecture docs (investigations). **`ask` reads** them.
 
 ```bash
 # Install ask
-curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/reposwarm/ask-cli/main/install.sh | sh
 
 # Set up local askbox (auto-detects RepoSwarm config)
 ask setup
@@ -396,7 +396,7 @@ ask results search "DynamoDB"
 ask results export --all -d ./docs
 ```
 
-See the [ask README](https://github.com/reposwarm/ask) for full documentation.
+See the [ask README](https://github.com/reposwarm/ask-cli) for full documentation.
 
 > **Note:** `reposwarm ask --arch` and `reposwarm results` still work but will show a deprecation notice pointing to the `ask` CLI.
 
