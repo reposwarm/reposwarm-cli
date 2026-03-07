@@ -66,28 +66,38 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			question := strings.Join(args, " ")
 
-			if archFlag && localFlag {
-				return runLocalArchAsk(question, hubURLFlag, reposFlag, adapterFlag, modelFlag)
+			if archFlag {
+				// For arch questions, try local askbox server first (fast path)
+				if localFlag {
+					return runLocalArchAsk(question, hubURLFlag, reposFlag, adapterFlag, modelFlag)
+				}
+
+				// Try local askbox first if it's a local install
+				cfg, _ := config.Load()
+				if cfg != nil && cfg.InstallType == "docker" {
+					if err := tryAskboxServer("http://localhost:8082", question, reposFlag, adapterFlag, modelFlag); err == nil {
+						return nil
+					}
+				}
+
+				// Fall back to API server
+				client, err := getClient()
+				if err != nil {
+					if flagJSON {
+						return output.JSON(map[string]any{
+							"success": false,
+							"error":   "cannot connect to API or askbox server",
+							"hint":    "use --local to run askbox via Docker",
+						})
+					}
+					return fmt.Errorf("cannot connect to API or askbox server\n  💡 Use --local to run askbox via Docker")
+				}
+				return runArchAsk(client, question, reposFlag, adapterFlag, noWaitFlag)
 			}
 
 			client, err := getClient()
 			if err != nil {
-				if archFlag {
-					// Can't reach API — suggest --local
-					if flagJSON {
-						return output.JSON(map[string]any{
-							"success": false,
-							"error":   "cannot connect to API server",
-							"hint":    "use --local to run askbox directly via Docker",
-						})
-					}
-					return fmt.Errorf("cannot connect to API server\n  💡 Use --local to run askbox directly via Docker")
-				}
 				return err
-			}
-
-			if archFlag {
-				return runArchAsk(client, question, reposFlag, adapterFlag, noWaitFlag)
 			}
 
 			return runSimpleAsk(client, question)

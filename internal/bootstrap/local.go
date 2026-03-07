@@ -661,11 +661,14 @@ services:
   api:
     container_name: reposwarm-api
     image: ghcr.io/reposwarm/api:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT:-3000}:3000"
     environment:
       - PORT=3000
       - API_BEARER_TOKEN=${API_BEARER_TOKEN}
+      - ASKBOX_URL=http://host.docker.internal:${ASKBOX_PORT:-8082}
       - TEMPORAL_SERVER_URL=temporal:7233
       - TEMPORAL_HTTP_URL=http://temporal-ui:8080
       - TEMPORAL_NAMESPACE=default
