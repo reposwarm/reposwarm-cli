@@ -2,7 +2,9 @@ package commands
 
 import (
 	"bufio"
+	"context"
 	"net/http"
+	"sort"
 	"time"
 	"fmt"
 	"os"
@@ -169,6 +171,27 @@ Examples:
 					}
 				} else {
 					output.F.Info("Skipped. Configure later: reposwarm config provider setup")
+				}
+
+				// ── Post-setup: Git provider + Arch-hub ──
+				fmt.Println()
+				output.F.Section("Git & Architecture Hub")
+				fmt.Println()
+				output.F.Info("RepoSwarm saves investigation results to an architecture hub repo.")
+				output.F.Info("You'll need a GitHub token and a target repo.")
+				fmt.Println()
+
+				fmt.Print("  Configure git provider + arch-hub now? [Y/n] ")
+				gitAnswer, _ := reader.ReadString('\n')
+				gitAnswer = strings.TrimSpace(gitAnswer)
+
+				if gitAnswer == "" || strings.ToLower(gitAnswer) == "y" || strings.ToLower(gitAnswer) == "yes" {
+					setupArchHub(reader, cliCfg)
+				} else {
+					output.F.Info("Skipped. Configure later:")
+					output.F.Info("  reposwarm config worker-env set GITHUB_TOKEN <token>")
+					output.F.Info("  reposwarm config worker-env set ARCH_HUB_BASE_URL https://github.com/YOUR-ORG")
+					output.F.Info("  reposwarm config worker-env set ARCH_HUB_REPO_NAME <repo-name>")
 				}
 
 				// ── Post-setup: Health check ──
@@ -648,4 +671,190 @@ func (p *spinnerPrinter) Printf(format string, args ...any) {
 		p.current = nil
 	}
 	fmt.Printf(format, args...)
+}
+
+func setupArchHub(reader *bufio.Reader, cfg *config.Config) {
+	composeDir := filepath.Join(cfg.EffectiveInstallDir(), bootstrap.ComposeSubDir)
+	envPath := filepath.Join(composeDir, "worker.env")
+
+	// 1. GitHub token
+	existingEnv, _ := bootstrap.ReadWorkerEnvFile(cfg.EffectiveInstallDir())
+	existingToken := existingEnv["GITHUB_TOKEN"]
+
+	if existingToken != "" {
+		masked := existingToken
+		if len(masked) > 8 {
+			masked = masked[:4] + "..." + masked[len(masked)-4:]
+		}
+		fmt.Printf("  GITHUB_TOKEN already set (%s)\n", masked)
+	} else {
+		fmt.Print("  GitHub token (for repo access): ")
+		token, _ := reader.ReadString('\n')
+		token = strings.TrimSpace(token)
+		if token != "" {
+			existingEnv["GITHUB_TOKEN"] = token
+			output.Successf("GITHUB_TOKEN set")
+		} else {
+			output.F.Warning("No token provided — private repos won't be accessible")
+		}
+	}
+
+	// 2. Arch-hub base URL
+	fmt.Println()
+	output.F.Info("Architecture hub = a git repo where .arch.md files are saved.")
+	output.F.Info("Example: https://github.com/your-org/architecture-hub")
+	fmt.Println()
+
+	existingBase := existingEnv["ARCH_HUB_BASE_URL"]
+	if existingBase != "" && existingBase != "https://github.com/your-org" {
+		fmt.Printf("  ARCH_HUB_BASE_URL already set: %s\n", existingBase)
+		fmt.Print("  Change it? [y/N] ")
+		change, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(change)) != "y" {
+			goto repoName
+		}
+	}
+
+	{
+		fmt.Print("  GitHub org/user URL (e.g. https://github.com/my-org): ")
+		baseURL, _ := reader.ReadString('\n')
+		baseURL = strings.TrimSpace(baseURL)
+		if baseURL != "" {
+			existingEnv["ARCH_HUB_BASE_URL"] = baseURL
+			existingBase = baseURL
+		}
+	}
+
+repoName:
+	// 3. Arch-hub repo name
+	existingRepo := existingEnv["ARCH_HUB_REPO_NAME"]
+	defaultRepo := "architecture-hub"
+	if existingRepo != "" {
+		defaultRepo = existingRepo
+	}
+
+	fmt.Printf("  Arch-hub repo name [%s]: ", defaultRepo)
+	repoName, _ := reader.ReadString('\n')
+	repoName = strings.TrimSpace(repoName)
+	if repoName == "" {
+		repoName = defaultRepo
+	}
+	existingEnv["ARCH_HUB_REPO_NAME"] = repoName
+
+	// 4. Write to worker.env
+	var lines []string
+	keys := make([]string, 0, len(existingEnv))
+	for k := range existingEnv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, existingEnv[k]))
+	}
+	if err := os.WriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+		output.F.Warning(fmt.Sprintf("Could not write worker.env: %v", err))
+		return
+	}
+
+	// 5. Test arch-hub access
+	if existingBase != "" && existingBase != "https://github.com/your-org" {
+		fmt.Println()
+		output.F.Info("Testing arch-hub access...")
+		fullRepo := strings.TrimSuffix(existingBase, "/") + "/" + repoName
+		ownerRepo := ""
+		if strings.Contains(fullRepo, "github.com/") {
+			parts := strings.SplitN(strings.TrimPrefix(fullRepo, "https://github.com/"), "/", 3)
+			if len(parts) >= 2 {
+				ownerRepo = parts[0] + "/" + parts[1]
+			}
+		}
+
+		if ownerRepo != "" {
+			token := existingEnv["GITHUB_TOKEN"]
+			client := &http.Client{Timeout: 10 * time.Second}
+			apiURL := fmt.Sprintf("https://api.github.com/repos/%s", ownerRepo)
+			req, _ := http.NewRequestWithContext(context.Background(), "GET", apiURL, nil)
+			if req != nil && token != "" {
+				req.Header.Set("Authorization", "token "+token)
+			}
+			if req != nil {
+				resp, err := client.Do(req)
+				if err != nil {
+					output.F.Warning(fmt.Sprintf("Cannot reach %s: %v", ownerRepo, err))
+				} else {
+					resp.Body.Close()
+					switch {
+					case resp.StatusCode == 200:
+						output.Successf("Arch-hub '%s' is accessible ✅", ownerRepo)
+					case resp.StatusCode == 404:
+						output.F.Warning(fmt.Sprintf("Repo '%s' not found", ownerRepo))
+						fmt.Println()
+						fmt.Print("  Create it now? [Y/n] ")
+						create, _ := reader.ReadString('\n')
+						create = strings.TrimSpace(create)
+						if create == "" || strings.ToLower(create) == "y" {
+							createArchHubRepo(ownerRepo, token)
+						}
+					case resp.StatusCode == 401 || resp.StatusCode == 403:
+						output.F.Warning(fmt.Sprintf("Auth failed for '%s' (HTTP %d) — check GITHUB_TOKEN", ownerRepo, resp.StatusCode))
+					default:
+						output.F.Warning(fmt.Sprintf("Unexpected HTTP %d for '%s'", resp.StatusCode, ownerRepo))
+					}
+				}
+			}
+		}
+	}
+
+	fmt.Println()
+	output.Successf("Arch-hub configured: %s/%s", existingBase, repoName)
+	output.F.Warning("Restart worker to apply: reposwarm restart worker")
+}
+
+func createArchHubRepo(ownerRepo string, token string) {
+	parts := strings.SplitN(ownerRepo, "/", 2)
+	if len(parts) != 2 || token == "" {
+		output.F.Warning("Cannot create repo (need owner/name and GITHUB_TOKEN)")
+		return
+	}
+
+	org, name := parts[0], parts[1]
+
+	// Try org repo first, fall back to user repo
+	client := &http.Client{Timeout: 15 * time.Second}
+	body := fmt.Sprintf(`{"name":"%s","description":"Architecture documentation generated by RepoSwarm","private":true,"auto_init":true}`, name)
+
+	// Try as org repo
+	apiURL := fmt.Sprintf("https://api.github.com/orgs/%s/repos", org)
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", apiURL, strings.NewReader(body))
+	if req != nil {
+		req.Header.Set("Authorization", "token "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 201 {
+				output.Successf("Created private repo '%s' ✅", ownerRepo)
+				return
+			}
+		}
+	}
+
+	// Fall back to user repo
+	apiURL = "https://api.github.com/user/repos"
+	req, _ = http.NewRequestWithContext(context.Background(), "POST", apiURL, strings.NewReader(body))
+	if req != nil {
+		req.Header.Set("Authorization", "token "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 201 {
+				output.Successf("Created private repo '%s' ✅", ownerRepo)
+				return
+			}
+			output.F.Warning(fmt.Sprintf("Could not create repo (HTTP %d) — create it manually on GitHub", resp.StatusCode))
+		} else {
+			output.F.Warning(fmt.Sprintf("Failed to create repo: %v", err))
+		}
+	}
 }

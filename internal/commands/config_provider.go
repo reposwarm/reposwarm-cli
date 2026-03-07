@@ -425,6 +425,7 @@ Examples:
 func newProviderSetCmd() *cobra.Command {
 	var checkFlag bool
 	var setRegion, setAuthMethod, setModel string
+	var setArchHubURL, setArchHubRepo, setGitToken string
 	var setPinFlag bool
 
 	cmd := &cobra.Command{
@@ -494,6 +495,17 @@ func newProviderSetCmd() *cobra.Command {
 
 			// Sync worker env
 			workerVars := config.WorkerEnvVars(&cfg.ProviderConfig, cfg.DefaultModel)
+
+			// Add arch-hub and git token vars if provided
+			if setArchHubURL != "" {
+				workerVars["ARCH_HUB_BASE_URL"] = setArchHubURL
+			}
+			if setArchHubRepo != "" {
+				workerVars["ARCH_HUB_REPO_NAME"] = setArchHubRepo
+			}
+			if setGitToken != "" {
+				workerVars["GITHUB_TOKEN"] = setGitToken
+			}
 
 			// Write to worker.env file for Docker installs (offline fallback)
 			installDir := cfg.EffectiveInstallDir()
@@ -588,6 +600,9 @@ func newProviderSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&setAuthMethod, "auth-method", "", "Auth method: iam-role, long-term-keys, profile, sso, api-key")
 	cmd.Flags().StringVar(&setModel, "model", "", "Model alias or full ID")
 	cmd.Flags().BoolVar(&setPinFlag, "pin", false, "Pin resolved model aliases to specific versions")
+	cmd.Flags().StringVar(&setArchHubURL, "arch-hub-url", "", "Architecture hub base URL (e.g. https://github.com/my-org)")
+	cmd.Flags().StringVar(&setArchHubRepo, "arch-hub-repo", "", "Architecture hub repo name (default: architecture-hub)")
+	cmd.Flags().StringVar(&setGitToken, "github-token", "", "GitHub token for repo access")
 	return cmd
 }
 
