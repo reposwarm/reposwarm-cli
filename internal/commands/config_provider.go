@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/reposwarm/reposwarm-cli/internal/bootstrap"
 	"github.com/reposwarm/reposwarm-cli/internal/config"
@@ -297,7 +298,10 @@ Examples:
 					}
 				}
 
-				// Run inference health check BEFORE saving config
+				// Run inference health check after worker has restarted
+				// Give the worker a moment to fully initialize with new env
+				time.Sleep(3 * time.Second)
+
 				if !flagJSON {
 					fmt.Println()
 					output.F.Section("Inference Health Check")

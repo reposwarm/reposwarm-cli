@@ -183,10 +183,33 @@ func newConfigShowCmd() *cobra.Command {
 					F.KeyValue("chunkSize", fmt.Sprint(serverCfg.ChunkSize))
 					F.KeyValue("parallelLimit", fmt.Sprint(serverCfg.ParallelLimit))
 
-					// Config drift warning
+					// Config drift warning — skip if models are aliases of the same thing
 					if cfg.EffectiveModel() != serverCfg.DefaultModel && serverCfg.DefaultModel != "" {
-						F.Println()
-						F.Warning(fmt.Sprintf("Model drift: CLI default '%s' ≠ server '%s'", cfg.EffectiveModel(), serverCfg.DefaultModel))
+						// Check if one model ID is a versioned form of the other
+						// e.g. "us.anthropic.claude-sonnet-4-6" vs "us.anthropic.claude-sonnet-4-20250514-v1:0"
+						cliModel := cfg.EffectiveModel()
+						srvModel := serverCfg.DefaultModel
+						sameFamily := false
+						for _, a := range config.KnownAliases() {
+							if (cliModel == a.Bedrock || cliModel == a.Anthropic) &&
+								(srvModel == a.Bedrock || srvModel == a.Anthropic) {
+								sameFamily = true
+								break
+							}
+						}
+						// Also check substring match (e.g. both contain "claude-sonnet-4")
+						if !sameFamily {
+							// Extract the model family name (strip version suffixes)
+							cliBase := strings.Split(strings.TrimPrefix(cliModel, "us."), "-v")[0]
+							srvBase := strings.Split(strings.TrimPrefix(srvModel, "us."), "-v")[0]
+							if strings.HasPrefix(cliBase, srvBase) || strings.HasPrefix(srvBase, cliBase) {
+								sameFamily = true
+							}
+						}
+						if !sameFamily {
+							F.Println()
+							F.Warning(fmt.Sprintf("Model drift: CLI default '%s' ≠ server '%s'", cliModel, srvModel))
+						}
 					}
 					F.Println()
 				}

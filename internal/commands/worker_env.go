@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,6 +65,50 @@ func newWorkerEnvListCmd() *cobra.Command {
 					} `json:"entries"`
 				}
 				if err := client.Get(ctx(), path, &resp); err == nil {
+					// Overlay worker.env file values on top of API response
+					// API may not see vars written directly to worker.env
+					fileVars := map[string]string{}
+					cfg, cfgErr := config.Load()
+					if cfgErr == nil {
+						if fv, fErr := bootstrap.ReadWorkerEnvFile(cfg.EffectiveInstallDir()); fErr == nil {
+							fileVars = fv
+						}
+					}
+
+					// Update entries that the API thinks are unset but file has them
+					for i := range resp.Entries {
+						if !resp.Entries[i].Set {
+							if fv, ok := fileVars[resp.Entries[i].Key]; ok && fv != "" {
+								resp.Entries[i].Set = true
+								if reveal {
+									resp.Entries[i].Value = fv
+								} else {
+									resp.Entries[i].Value = config.MaskedToken(fv)
+								}
+								resp.Entries[i].Source = "file"
+							}
+						}
+					}
+					// Add file-only vars not in API response
+					apiKeys := map[string]bool{}
+					for _, e := range resp.Entries {
+						apiKeys[e.Key] = true
+					}
+					for k, v := range fileVars {
+						if !apiKeys[k] && v != "" {
+							val := v
+							if !reveal {
+								val = config.MaskedToken(v)
+							}
+							resp.Entries = append(resp.Entries, struct {
+								Key    string `json:"key"`
+								Value  string `json:"value"`
+								Source string `json:"source"`
+								Set    bool   `json:"set"`
+							}{k, val, "file", true})
+						}
+					}
+
 					if flagJSON {
 						return output.JSON(resp)
 					}
@@ -219,7 +264,25 @@ func newWorkerEnvSetCmd() *cobra.Command {
 			}
 
 			output.Successf("Set %s = %s (written to %s)", key, config.MaskedToken(value), envPath)
-			output.F.Warning("Worker restart required. Run: reposwarm restart worker")
+
+			if restart {
+				cfg, cfgErr := config.Load()
+				if cfgErr == nil && bootstrap.IsDockerInstall(cfg.EffectiveInstallDir()) {
+					composeDir := filepath.Join(cfg.EffectiveInstallDir(), bootstrap.ComposeSubDir)
+					output.F.Info("Restarting worker...")
+					restartCmd := osexec.Command("docker", "compose", "up", "-d", "--force-recreate", "worker")
+					restartCmd.Dir = composeDir
+					if _, err := restartCmd.CombinedOutput(); err != nil {
+						output.F.Warning(fmt.Sprintf("Could not restart: %v", err))
+					} else {
+						output.Successf("Worker restarted")
+					}
+				} else {
+					output.F.Warning("Worker restart required. Run: reposwarm restart worker")
+				}
+			} else {
+				output.F.Warning("Worker restart required. Run: reposwarm restart worker")
+			}
 			return nil
 		},
 	}
