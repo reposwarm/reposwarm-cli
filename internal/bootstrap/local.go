@@ -655,7 +655,7 @@ services:
 
   dynamodb-local:
     container_name: reposwarm-dynamodb
-    image: amazon/dynamodb-local:latest
+    image: amazon/dynamodb-local:2.5.3
     ports:
       - "8000:8000"
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
@@ -677,6 +677,8 @@ services:
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
       - REPOSWARM_INSTALL_DIR=/data
+      - AWS_ACCESS_KEY_ID=local
+      - AWS_SECRET_ACCESS_KEY=local
     volumes:
       - config-data:/data
     depends_on:
