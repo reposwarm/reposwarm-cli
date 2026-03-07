@@ -133,7 +133,6 @@ func (e *Environment) MissingDeps() []string {
 	if !e.HasGit {
 		missing = append(missing, "git")
 	}
-	}
 	return missing
 }
 
