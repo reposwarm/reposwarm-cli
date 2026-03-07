@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/reposwarm/reposwarm-cli/internal/config"
@@ -240,14 +242,35 @@ Examples:
 			client, clientErr := getClient()
 			inferenceOK := false
 
-			if clientErr == nil {
-				// Sync env vars first (needed for inference check)
-				for k, v := range workerVars {
-					body := map[string]string{"value": v}
-					var resp any
-					if err := client.Put(ctx(), "/workers/worker-1/env/"+k, body, &resp); err != nil {
+			// For Docker Compose installs, write worker env to worker.env file
+			cfg, cfgErr := config.Load()
+			if cfgErr == nil && isLocalInstall(cfg) {
+				composeDir := getComposeDir(cfg)
+				if composeDir != "" {
+					workerEnvPath := filepath.Join(composeDir, "worker.env")
+					if err := writeWorkerEnv(workerEnvPath, workerVars); err != nil {
 						if !flagJSON {
-							output.F.Warning(fmt.Sprintf("Could not set worker env %s: %v", k, err))
+							output.F.Warning(fmt.Sprintf("Could not write worker.env: %v", err))
+						}
+					} else if !flagJSON {
+						output.F.Success(fmt.Sprintf("Worker env vars written to %s", workerEnvPath))
+						output.F.Info("Restart worker to apply: reposwarm restart worker")
+					}
+				}
+			}
+
+			if clientErr == nil {
+				// For non-Docker installs, also sync env vars via API
+				cfg2, cfgErr2 := config.Load()
+				isDocker := cfgErr2 == nil && isLocalInstall(cfg2) && getComposeDir(cfg2) != ""
+				if !isDocker {
+					for k, v := range workerVars {
+						body := map[string]string{"value": v}
+						var resp any
+						if err := client.Put(ctx(), "/workers/worker-1/env/"+k, body, &resp); err != nil {
+							if !flagJSON {
+								output.F.Warning(fmt.Sprintf("Could not set worker env %s: %v", k, err))
+							}
 						}
 					}
 				}
@@ -748,4 +771,41 @@ func orDefault(val, def string) string {
 		return def
 	}
 	return val
+}
+
+// writeWorkerEnv writes/merges env vars to a worker.env file.
+// Existing vars not in the new map are preserved.
+func writeWorkerEnv(path string, vars map[string]string) error {
+	existing := make(map[string]string)
+
+	// Read existing file if present
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if i := strings.Index(line, "="); i > 0 {
+				existing[line[:i]] = line[i+1:]
+			}
+		}
+	}
+
+	// Merge new vars (overwrite existing)
+	for k, v := range vars {
+		existing[k] = v
+	}
+
+	// Write sorted
+	var lines []string
+	var keys []string
+	for k := range existing {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, existing[k]))
+	}
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600)
 }

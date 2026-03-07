@@ -665,7 +665,9 @@ func TemporalComposeLocal() string {
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
-      - REPOSWARM_INSTALL_DIR=/app
+      - REPOSWARM_INSTALL_DIR=/data
+    volumes:
+      - config-data:/data
     depends_on:
       temporal:
         condition: service_started
@@ -681,6 +683,9 @@ func TemporalComposeLocal() string {
 
   worker:
     image: ghcr.io/reposwarm/worker:latest
+    env_file:
+      - path: ./worker.env
+        required: false
     environment:
       - TEMPORAL_SERVER_URL=temporal:7233
       - TEMPORAL_NAMESPACE=default
@@ -700,6 +705,8 @@ func TemporalComposeLocal() string {
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+    volumes:
+      - config-data:/data
     depends_on:
       - temporal
       - dynamodb-local
@@ -742,6 +749,7 @@ func TemporalComposeLocal() string {
 volumes:
   temporal-data:
   dynamodb-data:
+  config-data:
   askbox-output:
   askbox-arch-hub:
 `
