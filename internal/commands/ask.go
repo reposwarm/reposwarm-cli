@@ -2,7 +2,11 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -101,8 +105,132 @@ Examples:
 	return cmd
 }
 
-// runLocalArchAsk runs the askbox Docker container directly — no API server needed.
+// runLocalArchAsk queries the local askbox HTTP server, falling back to docker run for one-shot.
 func runLocalArchAsk(question, hubURL, repos, adapter, model string) error {
+	askboxURL := os.Getenv("ASKBOX_URL")
+	if askboxURL == "" {
+		cfg, _ := config.Load()
+		if cfg != nil && cfg.AskboxURL != "" {
+			askboxURL = cfg.AskboxURL
+		} else {
+			askboxURL = "http://localhost:8082"
+		}
+	}
+
+	// Try the local askbox HTTP server first
+	if err := tryAskboxServer(askboxURL, question, repos, adapter, model); err == nil {
+		return nil
+	}
+
+	// Fallback: one-shot docker run (for users without the persistent server)
+	return runDockerAsk(question, hubURL, repos, adapter, model)
+}
+
+// tryAskboxServer hits the local askbox HTTP API, returns nil on success.
+func tryAskboxServer(baseURL, question, repos, adapter, model string) error {
+	// Quick health check
+	healthResp, err := httpGet(baseURL + "/health")
+	if err != nil {
+		return err // Server not running
+	}
+	_ = healthResp
+
+	// Submit question
+	body := map[string]any{"question": question}
+	if repos != "" {
+		body["repos"] = strings.Split(repos, ",")
+	}
+	if adapter != "" {
+		body["adapter"] = adapter
+	}
+	if model != "" {
+		body["model"] = model
+	}
+
+	var submitResp struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := httpPost(baseURL+"/ask", body, &submitResp); err != nil {
+		return err
+	}
+
+	jobID := submitResp.ID
+
+	if !flagJSON && !flagAgent {
+		fmt.Printf("  %s Submitted — job-id: %s\n", output.Green("✓"), jobID)
+	}
+
+	// Poll for completion
+	for {
+		var job struct {
+			ID          string  `json:"id"`
+			Status      string  `json:"status"`
+			Answer      *string `json:"answer"`
+			Error       *string `json:"error"`
+			ToolCalls   int     `json:"tool_calls"`
+			CompletedAt *float64 `json:"completed_at"`
+			StartedAt   *float64 `json:"started_at"`
+		}
+		if err := httpGetJSON(baseURL+"/ask/"+jobID, &job); err != nil {
+			return err
+		}
+
+		switch job.Status {
+		case "completed":
+			answer := ""
+			if job.Answer != nil {
+				answer = *job.Answer
+			}
+			elapsed := ""
+			if job.StartedAt != nil && job.CompletedAt != nil {
+				elapsed = fmt.Sprintf(", %.1fs", *job.CompletedAt-*job.StartedAt)
+			}
+
+			if flagJSON {
+				return output.JSON(map[string]any{
+					"success":    true,
+					"jobId":      jobID,
+					"answer":     answer,
+					"chars":      len(answer),
+					"toolCalls":  job.ToolCalls,
+					"mode":       "askbox-server",
+				})
+			}
+			if flagAgent {
+				fmt.Print(answer)
+				return nil
+			}
+			fmt.Printf("\r\033[K  %s Answer ready (%d chars, %d tool calls%s)\n\n",
+				output.Green("✓"), len(answer), job.ToolCalls, elapsed)
+			fmt.Println(answer)
+			return nil
+
+		case "failed":
+			errMsg := "unknown error"
+			if job.Error != nil {
+				errMsg = *job.Error
+			}
+			if flagJSON {
+				return output.JSON(map[string]any{
+					"success": false,
+					"jobId":   jobID,
+					"error":   errMsg,
+				})
+			}
+			return fmt.Errorf("askbox failed: %s", errMsg)
+
+		default:
+			if !flagJSON && !flagAgent {
+				fmt.Printf("\r\033[K  %s %s (tool calls: %d)", output.Dim("⠋"), job.Status, job.ToolCalls)
+			}
+			time.Sleep(3 * time.Second)
+		}
+	}
+}
+
+// runDockerAsk runs the askbox as a one-shot Docker container (legacy/fallback).
+func runDockerAsk(question, hubURL, repos, adapter, model string) error {
 	// Resolve arch-hub URL: flag > config > error
 	if hubURL == "" {
 		cfg, _ := config.Load()
@@ -443,4 +571,47 @@ func runArchAsk(client *api.Client, question, repos, adapter string, noWait bool
 			time.Sleep(3 * time.Second)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers for direct askbox communication
+// ---------------------------------------------------------------------------
+
+func httpGet(url string) ([]byte, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+func httpGetJSON(url string, target any) error {
+	body, err := httpGet(url)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, target)
+}
+
+func httpPost(url string, payload any, target any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return json.Unmarshal(body, target)
 }

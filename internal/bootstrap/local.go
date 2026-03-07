@@ -731,6 +731,8 @@ services:
         required: false
     environment:
       - ASKBOX_ADAPTER=${ASKBOX_ADAPTER:-claude-agent-sdk}
+      - ASKBOX_PORT=${ASKBOX_PORT:-8082}
+      - ARCH_HUB_URL=${ARCH_HUB_URL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK:-}
       - AWS_REGION=${AWS_REGION:-}
@@ -742,8 +744,11 @@ services:
     volumes:
       - askbox-output:/output
       - askbox-arch-hub:/tmp/arch-hub
-    profiles:
-      - ask
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   temporal-data:
