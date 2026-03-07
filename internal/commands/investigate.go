@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/reposwarm/reposwarm-cli/internal/api"
 	"github.com/reposwarm/reposwarm-cli/internal/config"
@@ -135,19 +136,106 @@ Examples:
 			}
 
 			if all {
-				req := api.InvestigateDailyRequest{
-					Model:         model,
-					ChunkSize:     chunkSize,
-					ParallelLimit: parallel,
+				// Fetch enabled repos from API (not the worker's internal repos.json)
+				var enabledReposList []struct {
+					Name    string `json:"name"`
+					Enabled bool   `json:"enabled"`
 				}
-				var result any
-				if err := client.Post(ctx(), "/investigate/daily", req, &result); err != nil {
-					return err
+				if err := client.Get(ctx(), "/repos", &enabledReposList); err != nil {
+					return fmt.Errorf("fetching repos: %w", err)
 				}
+
+				// Filter to enabled repos
+				var enabledRepos []string
+				for _, r := range enabledReposList {
+					if r.Enabled {
+						enabledRepos = append(enabledRepos, r.Name)
+					}
+				}
+
+				if len(enabledRepos) == 0 {
+					return fmt.Errorf("no enabled repos found\n  Add repos first: reposwarm repos add <name> --url <url> --source GitHub")
+				}
+
+				// Pre-flight (check once, not per repo)
+				if !force {
+					checks := runPreflightChecks("")
+					failed := 0
+					for _, c := range checks {
+						if c.Status == "fail" {
+							failed++
+						}
+					}
+					if failed > 0 {
+						if flagJSON {
+							return output.JSON(map[string]any{
+								"error":  "pre-flight failed",
+								"checks": checks,
+							})
+						}
+						output.F.Error("Cannot start: pre-flight checks failed")
+						for _, c := range checks {
+							switch c.Status {
+							case "ok":
+								output.F.Printf("  %s %s: %s\n", output.Green("[OK]"), c.Name, c.Message)
+							case "fail":
+								output.F.Printf("  %s %s: %s\n", output.Red("[FAIL]"), c.Name, c.Message)
+							}
+						}
+						return fmt.Errorf("pre-flight failed (%d issues)", failed)
+					}
+					if !flagJSON {
+						healthy := 0
+						for _, c := range checks {
+							if c.Status == "ok" {
+								healthy++
+							}
+						}
+						output.F.Printf("  %s Pre-flight passed (%d checks)\n", output.Green("✓"), healthy)
+					}
+				}
+
+				if dryRun {
+					if flagJSON {
+						return output.JSON(map[string]any{"dryRun": true, "repos": enabledRepos})
+					}
+					output.Successf("Dry run: would investigate %d repos: %s", len(enabledRepos), strings.Join(enabledRepos, ", "))
+					return nil
+				}
+
+				// Start individual investigations for each enabled repo
+				started := 0
+				for _, repoName := range enabledRepos {
+					req := api.InvestigateRequest{
+						RepoName:  repoName,
+						Model:     model,
+						ChunkSize: chunkSize,
+					}
+					var result any
+					if err := client.Post(ctx(), "/investigate/single", req, &result); err != nil {
+						if !flagJSON {
+							output.F.Warning(fmt.Sprintf("Failed to start %s: %v", repoName, err))
+						}
+						continue
+					}
+					started++
+					if !flagJSON {
+						output.Successf("Investigation started for %s", output.Bold(repoName))
+					}
+				}
+
 				if flagJSON {
-					return output.JSON(result)
+					return output.JSON(map[string]any{
+						"started": started,
+						"total":   len(enabledRepos),
+						"repos":   enabledRepos,
+					})
 				}
-				output.Successf("Daily investigation started for all enabled repos")
+				if started == 0 {
+					return fmt.Errorf("failed to start any investigations")
+				}
+				output.F.Println()
+				output.Successf("Started %d/%d investigations", started, len(enabledRepos))
 				return nil
 			}
 
