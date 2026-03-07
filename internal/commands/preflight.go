@@ -271,14 +271,19 @@ func runPreflightChecks(repo string) []preflightCheck {
 	// 6. Arch-hub target — verify repo exists and git token can push to it
 	checks = append(checks, checkArchHub(cfg, cfgErr, isDocker)...)
 
-	// 7. Model (from server config)
-	var serverCfg struct {
-		DefaultModel string `json:"defaultModel"`
-	}
-	if err := client.Get(ctx(), "/config", &serverCfg); err == nil && serverCfg.DefaultModel != "" {
-		checks = append(checks, preflightCheck{"Model", "ok", serverCfg.DefaultModel})
+	// 7. Model (prefer local config for consistent display, fall back to server)
+	cliCfg, _ := config.Load()
+	if cliCfg != nil && cliCfg.DefaultModel != "" {
+		checks = append(checks, preflightCheck{"Model", "ok", cliCfg.DefaultModel})
 	} else {
-		checks = append(checks, preflightCheck{"Model", "warn", "could not determine model from server"})
+		var serverCfg struct {
+			DefaultModel string `json:"defaultModel"`
+		}
+		if err := client.Get(ctx(), "/config", &serverCfg); err == nil && serverCfg.DefaultModel != "" {
+			checks = append(checks, preflightCheck{"Model", "ok", serverCfg.DefaultModel})
+		} else {
+			checks = append(checks, preflightCheck{"Model", "warn", "could not determine model"})
+		}
 	}
 
 	return checks

@@ -261,6 +261,11 @@ Examples:
 					}
 
 					// Auto-restart worker to pick up new env
+					// Stop first to avoid Docker rename collision, then recreate
+					stopCmd := exec.Command("docker", "compose", "stop", "worker")
+					stopCmd.Dir = composeDir
+					_, _ = stopCmd.CombinedOutput()
+
 					restartCmd := exec.Command("docker", "compose", "up", "-d", "--force-recreate", "worker")
 					restartCmd.Dir = composeDir
 					if restartOut, err := restartCmd.CombinedOutput(); err != nil {

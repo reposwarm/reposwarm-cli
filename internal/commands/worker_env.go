@@ -124,6 +124,9 @@ func newWorkerEnvListCmd() *cobra.Command {
 						valStr := e.Value
 						if !e.Set {
 							valStr = output.Dim("(not set)")
+						} else if !reveal {
+							// Mask all values consistently unless --reveal
+							valStr = config.MaskedToken(valStr)
 						}
 						rows = append(rows, []string{e.Key, valStr, e.Source})
 					}
