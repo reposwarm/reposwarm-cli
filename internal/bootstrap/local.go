@@ -725,15 +725,15 @@ services:
   askbox:
     container_name: reposwarm-askbox
     image: ghcr.io/reposwarm/askbox:latest
+    network_mode: host
+    env_file:
+      - path: ./worker.env
+        required: false
     environment:
       - ASKBOX_ADAPTER=${ASKBOX_ADAPTER:-claude-agent-sdk}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK:-}
       - AWS_REGION=${AWS_REGION:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
-      - AWS_PROFILE=${AWS_PROFILE:-}
       - AWS_BEARER_TOKEN_BEDROCK=${AWS_BEARER_TOKEN_BEDROCK:-}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - LITELLM_API_URL=${LITELLM_API_URL:-}
