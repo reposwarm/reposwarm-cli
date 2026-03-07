@@ -97,7 +97,7 @@ Create or use an existing GitHub repository for architecture results:
 
 ```bash
 # Create arch-hub repo (one-time)
-gh repo create <org>/e2e-arch-hub --public --description "Architecture hub"
+gh repo create <org>/e2e-arch-hub --private --description "Architecture hub"
 ```
 
 Configure the worker to push results there:
