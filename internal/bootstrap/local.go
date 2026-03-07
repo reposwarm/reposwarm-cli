@@ -665,20 +665,17 @@ services:
   api:
     container_name: reposwarm-api
     image: ghcr.io/reposwarm/api:latest
-    ports:
-      - "${API_PORT:-3000}:3000"
+    network_mode: host
     environment:
       - PORT=3000
       - API_BEARER_TOKEN=${API_BEARER_TOKEN}
-      - TEMPORAL_SERVER_URL=temporal:7233
-      - TEMPORAL_HTTP_URL=http://temporal-ui:8080
+      - TEMPORAL_SERVER_URL=localhost:7233
+      - TEMPORAL_HTTP_URL=http://localhost:8080
       - TEMPORAL_NAMESPACE=default
       - AWS_REGION=${AWS_REGION:-us-east-1}
-      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - DYNAMODB_ENDPOINT=http://localhost:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
       - REPOSWARM_INSTALL_DIR=/data
-      - AWS_ACCESS_KEY_ID=local
-      - AWS_SECRET_ACCESS_KEY=local
     volumes:
       - config-data:/data
     depends_on:
