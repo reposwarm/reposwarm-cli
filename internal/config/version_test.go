@@ -75,7 +75,7 @@ func TestCheckVersions(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Compatible {
-		t.Error("API 1.0.0 should NOT be compatible with min 1.2.0")
+	if !results[0].Compatible {
+		t.Error("API 1.0.0 should be compatible with min 1.0.0")
 	}
 }

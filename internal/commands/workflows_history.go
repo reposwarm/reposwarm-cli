@@ -43,15 +43,13 @@ Use --filter to search for specific event types (case-insensitive).`,
 
 			// Get history from API
 			var response struct {
-				Data struct {
-					Events []map[string]any `json:"events"`
-				} `json:"data"`
+				Events []map[string]any `json:"events"`
 			}
 			if err := client.Get(ctx(), path, &response); err != nil {
 				return err
 			}
 
-			events := response.Data.Events
+			events := response.Events
 
 			// Apply filter if provided
 			if filter != "" {
@@ -59,7 +57,10 @@ Use --filter to search for specific event types (case-insensitive).`,
 				filterLower := strings.ToLower(filter)
 				for _, event := range events {
 					eventType, _ := event["eventType"].(string)
-					if strings.Contains(strings.ToLower(eventType), filterLower) {
+					// Match against both raw and normalized event type
+					normalized := strings.ReplaceAll(strings.TrimPrefix(eventType, "EVENT_TYPE_"), "_", "")
+					if strings.Contains(strings.ToLower(eventType), filterLower) ||
+						strings.Contains(strings.ToLower(normalized), filterLower) {
 						filtered = append(filtered, event)
 					}
 				}
@@ -89,10 +90,33 @@ Use --filter to search for specific event types (case-insensitive).`,
 			activityScheduled := make(map[string]time.Time)
 
 			for _, event := range events {
-				eventID, _ := event["eventId"].(float64)
+				eventID, _ := event["eventId"].(string)
+				if eventID == "" {
+					// Fallback for float64 encoding
+					if eid, ok := event["eventId"].(float64); ok {
+						eventID = fmt.Sprintf("%.0f", eid)
+					}
+				}
 				eventTime, _ := event["eventTime"].(string)
-				eventType, _ := event["eventType"].(string)
+				rawEventType, _ := event["eventType"].(string)
+
+				// Normalize event type: strip EVENT_TYPE_ prefix, convert to readable form
+				eventType := rawEventType
+				eventType = strings.TrimPrefix(eventType, "EVENT_TYPE_")
+				// Convert SNAKE_CASE to PascalCase for readability
+				parts := strings.Split(eventType, "_")
+				for i, p := range parts {
+					if len(p) > 0 {
+						parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
+					}
+				}
+				eventType = strings.Join(parts, "")
+
+				// Details may be nested or at top level
 				details, _ := event["details"].(map[string]any)
+				if details == nil {
+					details = event // fallback: use event map as details
+				}
 
 				// Parse event time
 				var eventTimeStr string
@@ -103,11 +127,11 @@ Use --filter to search for specific event types (case-insensitive).`,
 				}
 
 				// Format event header
-				F.Printf("  #%-3.0f  %s  %s\n", eventID, eventTimeStr, output.Bold(eventType))
+				F.Printf("  #%-3s  %s  %s\n", eventID, eventTimeStr, output.Bold(eventType))
 
-				// Show event-specific details
-				switch eventType {
-				case "WorkflowExecutionStarted":
+				// Show event-specific details (match both raw and normalized types)
+				switch {
+				case strings.Contains(rawEventType, "WORKFLOW_EXECUTION_STARTED") || eventType == "WorkflowExecutionStarted":
 					if input, ok := details["input"].(string); ok && input != "" {
 						// Truncate long input
 						if len(input) > 200 {
@@ -116,7 +140,7 @@ Use --filter to search for specific event types (case-insensitive).`,
 						F.Printf("      Input: %s\n", input)
 					}
 
-				case "ActivityTaskScheduled":
+				case strings.Contains(rawEventType, "ACTIVITY_TASK_SCHEDULED") || eventType == "ActivityTaskScheduled":
 					if activityType, ok := details["activityType"].(string); ok {
 						F.Printf("      Activity: %s\n", activityType)
 						// Store schedule time for duration calculation
@@ -128,12 +152,12 @@ Use --filter to search for specific event types (case-insensitive).`,
 						F.Printf("      TaskQueue: %s\n", taskQueue)
 					}
 
-				case "ActivityTaskStarted":
+				case strings.Contains(rawEventType, "ACTIVITY_TASK_STARTED") || eventType == "ActivityTaskStarted":
 					if identity, ok := details["identity"].(string); ok {
 						F.Printf("      Identity: %s\n", identity)
 					}
 
-				case "ActivityTaskCompleted":
+				case strings.Contains(rawEventType, "ACTIVITY_TASK_COMPLETED") || eventType == "ActivityTaskCompleted":
 					// Calculate duration if we have the scheduled time
 					if activityType, ok := details["activityType"].(string); ok {
 						if schedTime, exists := activityScheduled[activityType]; exists {
@@ -144,7 +168,7 @@ Use --filter to search for specific event types (case-insensitive).`,
 						}
 					}
 
-				case "ActivityTaskFailed":
+				case strings.Contains(rawEventType, "ACTIVITY_TASK_FAILED") || eventType == "ActivityTaskFailed":
 					if failure, ok := details["failure"].(map[string]any); ok {
 						if message, ok := failure["message"].(string); ok {
 							F.Printf("      %s\n", output.Red("Failure: "+message))
@@ -154,12 +178,12 @@ Use --filter to search for specific event types (case-insensitive).`,
 						}
 					}
 
-				case "ActivityTaskTimedOut":
+				case strings.Contains(rawEventType, "ACTIVITY_TASK_TIMED_OUT") || eventType == "ActivityTaskTimedOut":
 					if timeoutType, ok := details["timeoutType"].(string); ok {
 						F.Printf("      %s\n", output.Yellow("Timeout Type: "+timeoutType))
 					}
 
-				case "WorkflowExecutionCompleted":
+				case strings.Contains(rawEventType, "WORKFLOW_EXECUTION_COMPLETED") || eventType == "WorkflowExecutionCompleted":
 					if result, ok := details["result"].(string); ok && result != "" {
 						// Truncate long result
 						if len(result) > 200 {
@@ -168,24 +192,24 @@ Use --filter to search for specific event types (case-insensitive).`,
 						F.Printf("      Result: %s\n", result)
 					}
 
-				case "WorkflowExecutionFailed":
+				case strings.Contains(rawEventType, "WORKFLOW_EXECUTION_FAILED") || eventType == "WorkflowExecutionFailed":
 					if failure, ok := details["failure"].(map[string]any); ok {
 						if message, ok := failure["message"].(string); ok {
 							F.Printf("      %s\n", output.Red("Failure: "+message))
 						}
 					}
 
-				case "WorkflowExecutionTerminated":
+				case strings.Contains(rawEventType, "WORKFLOW_EXECUTION_TERMINATED") || eventType == "WorkflowExecutionTerminated":
 					if reason, ok := details["reason"].(string); ok {
 						F.Printf("      Reason: %s\n", reason)
 					}
 
-				case "TimerStarted":
+				case strings.Contains(rawEventType, "TIMER_STARTED") || eventType == "TimerStarted":
 					if delay, ok := details["startToFireTimeout"].(string); ok {
 						F.Printf("      Delay: %s\n", delay)
 					}
 
-				case "TimerFired":
+				case strings.Contains(rawEventType, "TIMER_FIRED") || eventType == "TimerFired":
 					if timerID, ok := details["timerId"].(string); ok {
 						F.Printf("      Timer ID: %s\n", timerID)
 					}

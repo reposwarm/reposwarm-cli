@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/reposwarm/reposwarm-cli/internal/api"
 	"github.com/reposwarm/reposwarm-cli/internal/bootstrap"
@@ -115,14 +116,21 @@ func newWorkersListCmd() *cobra.Command {
 			for _, w := range resp.Workers {
 				statusStr := formatWorkerStatus(w.Status)
 				envStr := output.Green("OK")
-				if len(w.EnvErrors) > 0 {
-					envStr = output.Red(fmt.Sprintf("%d env errors", len(w.EnvErrors)))
+
+				// Filter out false positive env errors based on provider config
+				filteredErrors := filterEnvErrors(w.EnvErrors)
+				if len(filteredErrors) > 0 {
+					envStr = output.Red(fmt.Sprintf("%d env errors", len(filteredErrors)))
 				}
 				currentTask := w.CurrentTask
 				if currentTask == "" {
 					currentTask = output.Dim("idle")
 				}
 				lastAct := w.LastActivity
+				if lastAct == "" {
+					// Try to get last activity from completed workflows
+					lastAct = getLastWorkflowTime(client)
+				}
 				if lastAct == "" {
 					lastAct = output.Dim("never")
 				}
@@ -338,4 +346,69 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// filterEnvErrors removes false-positive env errors based on current provider config.
+// The API reports missing vars without provider context; the CLI knows the real requirements.
+func filterEnvErrors(errors []string) []string {
+	cfg, err := config.Load()
+	if err != nil {
+		return errors // can't determine provider, return as-is
+	}
+
+	provider := cfg.EffectiveProvider()
+	var filtered []string
+
+	for _, e := range errors {
+		skip := false
+		switch provider {
+		case config.ProviderBedrock:
+			// Bedrock doesn't need ANTHROPIC_API_KEY; model is set via worker.env
+			if e == "ANTHROPIC_API_KEY" || e == "ANTHROPIC_MODEL" {
+				skip = true
+			}
+		case config.ProviderLiteLLM:
+			// LiteLLM doesn't need ANTHROPIC_API_KEY
+			if e == "ANTHROPIC_API_KEY" {
+				skip = true
+			}
+		}
+		if !skip {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+// getLastWorkflowTime returns the most recent workflow close time, or "" if none found.
+func getLastWorkflowTime(client *api.Client) string {
+	if client == nil {
+		return ""
+	}
+	var wfResp struct {
+		Executions []struct {
+			CloseTime string `json:"closeTime"`
+			StartTime string `json:"startTime"`
+		} `json:"executions"`
+	}
+	if err := client.Get(ctx(), "/workflows?status=Completed&limit=1", &wfResp); err != nil {
+		return ""
+	}
+	if len(wfResp.Executions) > 0 {
+		t := wfResp.Executions[0].CloseTime
+		if t == "" {
+			t = wfResp.Executions[0].StartTime
+		}
+		if t != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, t); err == nil {
+				return parsed.Format("2006-01-02 15:04")
+			}
+			// Try RFC3339 without nano
+			if parsed, err := time.Parse(time.RFC3339, t); err == nil {
+				return parsed.Format("2006-01-02 15:04")
+			}
+			return t
+		}
+	}
+	return ""
 }

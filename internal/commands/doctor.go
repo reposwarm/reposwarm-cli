@@ -1000,7 +1000,15 @@ func checkProviderCredentials(priorChecks []checkResult) []checkResult {
 		}
 	}
 
-	// Run inference health check
+	// Run inference health check (skip for Docker installs — use preflight instead)
+	isDockerInstall := cfg.IsDockerInstall()
+	if isDockerInstall {
+		if !flagJSON {
+			c := checkResult{"Inference check", "ok", "skipped (Docker install — use 'reposwarm preflight')"}
+			printCheck(c)
+			results = append(results, c)
+		}
+	} else {
 	if !flagJSON {
 		fmt.Print("  Inference check: ")
 	}
@@ -1073,6 +1081,8 @@ func checkProviderCredentials(priorChecks []checkResult) []checkResult {
 			}
 		}
 	}
+
+	} // end else (non-Docker inference check)
 
 	return results
 }

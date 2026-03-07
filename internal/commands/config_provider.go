@@ -247,9 +247,9 @@ Examples:
 			workerRestarted := false
 
 			// For Docker Compose installs, write worker env to worker.env file
-			cfg, cfgErr := config.Load()
-			if cfgErr == nil && isLocalInstall(cfg) {
-				composeDir := getComposeDir(cfg)
+			cfgLocal, cfgErr := config.Load()
+			if cfgErr == nil && isLocalInstall(cfgLocal) {
+				composeDir := getComposeDir(cfgLocal)
 				if composeDir != "" {
 					workerEnvPath := filepath.Join(composeDir, "worker.env")
 					if err := writeWorkerEnv(workerEnvPath, workerVars); err != nil {
