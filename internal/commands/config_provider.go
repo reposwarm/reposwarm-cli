@@ -424,11 +424,13 @@ Examples:
 
 func newProviderSetCmd() *cobra.Command {
 	var checkFlag bool
+	var setRegion, setAuthMethod, setModel string
+	var setPinFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "set <provider>",
 		Short: "Quick-switch provider (preserves other settings)",
-		Args:  friendlyExactArgs(1, "reposwarm config provider set <provider>\n\nProviders: anthropic, bedrock, litellm\n\nExample:\n  reposwarm config provider set bedrock"),
+		Args:  friendlyExactArgs(1, "reposwarm config provider set <provider>\n\nProviders: anthropic, bedrock, litellm\n\nExample:\n  reposwarm config provider set bedrock --auth-method iam-role --region us-east-1"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := args[0]
 			if !config.IsValidProvider(provider) {
@@ -443,22 +445,48 @@ func newProviderSetCmd() *cobra.Command {
 			oldProvider := cfg.EffectiveProvider()
 			cfg.ProviderConfig.Provider = config.Provider(provider)
 
+			// Apply optional flags
+			if setRegion != "" {
+				cfg.ProviderConfig.AWSRegion = setRegion
+			}
+			if setAuthMethod != "" {
+				cfg.ProviderConfig.BedrockAuth = config.BedrockAuthMethod(setAuthMethod)
+			}
+
 			// Re-resolve default model for new provider
-			for _, a := range config.KnownAliases() {
-				switch oldProvider {
-				case config.ProviderBedrock:
-					if cfg.DefaultModel == a.Bedrock {
-						cfg.DefaultModel = config.ResolveModel(a.Alias, config.Provider(provider), cfg.ProviderConfig.ModelPins)
-					}
-				default:
-					if cfg.DefaultModel == a.Anthropic {
-						cfg.DefaultModel = config.ResolveModel(a.Alias, config.Provider(provider), cfg.ProviderConfig.ModelPins)
+			if setModel != "" {
+				// User explicitly set a model — resolve it
+				cfg.DefaultModel = config.ResolveModel(setModel, config.Provider(provider), cfg.ProviderConfig.ModelPins)
+			} else {
+				for _, a := range config.KnownAliases() {
+					switch oldProvider {
+					case config.ProviderBedrock:
+						if cfg.DefaultModel == a.Bedrock {
+							cfg.DefaultModel = config.ResolveModel(a.Alias, config.Provider(provider), cfg.ProviderConfig.ModelPins)
+						}
+					default:
+						if cfg.DefaultModel == a.Anthropic {
+							cfg.DefaultModel = config.ResolveModel(a.Alias, config.Provider(provider), cfg.ProviderConfig.ModelPins)
+						}
 					}
 				}
 			}
 
-			// Clear pins from old provider (they have wrong format)
-			cfg.ProviderConfig.ModelPins = nil
+			// Handle --pin
+			if setPinFlag {
+				cfg.ProviderConfig.ModelPins = map[string]string{}
+				for _, a := range config.KnownAliases() {
+					switch config.Provider(provider) {
+					case config.ProviderBedrock:
+						cfg.ProviderConfig.ModelPins[a.Alias] = a.Bedrock
+					default:
+						cfg.ProviderConfig.ModelPins[a.Alias] = a.Anthropic
+					}
+				}
+			} else {
+				// Clear pins from old provider (they have wrong format)
+				cfg.ProviderConfig.ModelPins = nil
+			}
 
 			if err := config.Save(cfg); err != nil {
 				return err
@@ -466,6 +494,24 @@ func newProviderSetCmd() *cobra.Command {
 
 			// Sync worker env
 			workerVars := config.WorkerEnvVars(&cfg.ProviderConfig, cfg.DefaultModel)
+
+			// Write to worker.env file for Docker installs (offline fallback)
+			installDir := cfg.EffectiveInstallDir()
+			if bootstrap.IsDockerInstall(installDir) {
+				composeDir := filepath.Join(installDir, bootstrap.ComposeSubDir)
+				workerEnvPath := filepath.Join(composeDir, "worker.env")
+				if err := writeWorkerEnv(workerEnvPath, workerVars); err != nil {
+					if !flagJSON {
+						output.F.Warning(fmt.Sprintf("Could not write worker.env: %v", err))
+					}
+				} else {
+					if !flagJSON {
+						output.F.Success(fmt.Sprintf("Worker env vars written to %s", workerEnvPath))
+					}
+				}
+			}
+
+			// Also sync via API if available
 			client, clientErr := getClient()
 			if clientErr == nil {
 				for k, v := range workerVars {
@@ -538,6 +584,10 @@ func newProviderSetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&checkFlag, "check", false, "Run inference health check after switching")
+	cmd.Flags().StringVar(&setRegion, "region", "", "AWS region (for bedrock)")
+	cmd.Flags().StringVar(&setAuthMethod, "auth-method", "", "Auth method: iam-role, long-term-keys, profile, sso, api-key")
+	cmd.Flags().StringVar(&setModel, "model", "", "Model alias or full ID")
+	cmd.Flags().BoolVar(&setPinFlag, "pin", false, "Pin resolved model aliases to specific versions")
 	return cmd
 }
 

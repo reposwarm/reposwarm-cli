@@ -126,11 +126,14 @@ func newConfigShowCmd() *cobra.Command {
 
 			// Provider config
 			F.Section("LLM Provider")
-			provider := string(cfg.ProviderConfig.Provider)
-			if provider == "" {
-				provider = "(not configured)"
+			provider := string(cfg.EffectiveProvider())
+			if cfg.ProviderConfig.Provider == "" && cfg.DefaultModel == "" {
+				// Nothing configured at all
+				F.KeyValue("provider", "(not configured)")
+				F.Info("Run: reposwarm config provider setup")
+			} else {
+				F.KeyValue("provider", provider)
 			}
-			F.KeyValue("provider", provider)
 			if cfg.ProviderConfig.Provider == config.ProviderBedrock {
 				auth := string(cfg.ProviderConfig.BedrockAuth)
 				if auth == "" {

@@ -18,23 +18,33 @@ var knownServices = []string{"api", "worker", "temporal", "ui"}
 
 // resolveInstallDir finds the local installation directory.
 // Checks the configured installDir first, then tries cwd and cwd/reposwarm.
+// Supports both local (api/ + worker/ subdirs) and Docker-only (temporal/docker-compose.yml) installs.
 // Updates config if found in an alternative location.
 func resolveInstallDir(cfg *config.Config) (string, error) {
 	installDir := cfg.EffectiveInstallDir()
-	if bootstrap.IsLocalInstall(installDir) {
+	if flagVerbose {
+		output.F.Info(fmt.Sprintf("[verbose] Checking installDir: %s", installDir))
+		output.F.Info(fmt.Sprintf("[verbose]   IsLocalInstall (api/ or worker/): %v", bootstrap.IsLocalInstall(installDir)))
+		output.F.Info(fmt.Sprintf("[verbose]   IsDockerInstall (temporal/docker-compose.yml): %v", bootstrap.IsDockerInstall(installDir)))
+	}
+	if bootstrap.IsLocalInstall(installDir) || bootstrap.IsDockerInstall(installDir) {
 		return installDir, nil
 	}
 
 	cwd, _ := os.Getwd()
 	for _, candidate := range []string{cwd, filepath.Join(cwd, "reposwarm")} {
-		if bootstrap.IsLocalInstall(candidate) {
+		if flagVerbose {
+			output.F.Info(fmt.Sprintf("[verbose] Checking candidate: %s", candidate))
+			output.F.Info(fmt.Sprintf("[verbose]   IsLocalInstall: %v, IsDockerInstall: %v", bootstrap.IsLocalInstall(candidate), bootstrap.IsDockerInstall(candidate)))
+		}
+		if bootstrap.IsLocalInstall(candidate) || bootstrap.IsDockerInstall(candidate) {
 			cfg.InstallDir = candidate
 			_ = config.Save(cfg)
 			return candidate, nil
 		}
 	}
 
-	return "", fmt.Errorf("no local installation found at %s\nRun 'reposwarm new --local' to set up, or set it with: reposwarm config set installDir /path/to/install", installDir)
+	return "", fmt.Errorf("no local installation found at %s (checked for api/, worker/ subdirs and temporal/docker-compose.yml)\nRun 'reposwarm new --local' to set up, or set it with: reposwarm config set installDir /path/to/install", installDir)
 }
 
 func newServicesCmd() *cobra.Command {
