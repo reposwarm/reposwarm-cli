@@ -1,59 +1,66 @@
-# E2E Test Scenario: RepoSwarm + Ask CLI
+# E2E Test Scenario: Full RepoSwarm + Ask CLI Workflow
 
-Full end-to-end workflow testing the write/read split between RepoSwarm (investigations) and the `ask` CLI (querying architecture knowledge).
+## Overview
+
+This scenario tests the complete write/read pipeline:
+1. **RepoSwarm** (write side): Install locally, configure provider, investigate a repo → generates `.arch.md` and pushes to arch-hub
+2. **Ask CLI** (read side): Install, set up askbox, query architecture knowledge, browse results
 
 ## Prerequisites
 
-- Fresh EC2 instance (tested on t4g.medium, Ubuntu 24.04, ARM64)
-- IAM role with Bedrock `InvokeModel` permission (e.g., `AllAccessAdmin`)
-- Docker + Docker Compose v2 installed
-- SSH access from test runner
+- AWS EC2 instance (t4g.medium or larger, ARM64, Ubuntu 24.04)
+- IAM role with `bedrock:InvokeModel` permission
+- Docker + Docker Compose installed
+- GitHub account with push access to an arch-hub repository
+- `gh` CLI installed and authenticated
 
 ## Instance Setup
 
 ```bash
-# If reusing an existing instance, clean up first:
-docker stop $(docker ps -aq) && docker rm $(docker ps -aq)
-docker volume prune -f && docker network prune -f
-docker rmi $(docker images -q)
-rm -rf ~/.reposwarm ~/.config/ask ~/.ask /tmp/arch-hub
+# Fresh Ubuntu instance — install Docker
+sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Install gh CLI
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
+sudo apt-get update && sudo apt-get install -y gh
+gh auth login
 ```
 
-## Test Steps
-
-### Step 1: Install CLIs
+## Step 1: Install RepoSwarm CLI
 
 ```bash
-# Install reposwarm CLI (from release or local build)
 curl -fsSL https://raw.githubusercontent.com/reposwarm/reposwarm-cli/main/install.sh | sh
-
-# Install ask CLI
-curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh
-
-# Verify
 reposwarm version
-ask version
 ```
 
-### Step 2: Set up RepoSwarm (local Docker mode)
+**Expected:** Version string printed, binary at `/usr/local/bin/reposwarm`.
+
+## Step 2: Local Setup
 
 ```bash
 reposwarm new --local --for-agent --force
 ```
 
-**Expected:** Temporal, DynamoDB, API, UI containers start. CLI configured with API token.
+**Expected:**
+- Docker containers start: temporal, postgres, dynamodb, api, ui, worker
+- API healthy at `http://localhost:3000`
+- UI at `http://localhost:3001`
+- Temporal UI at `http://localhost:8233`
+- API token generated and saved to `~/.reposwarm/config.json`
 
 **Verify:**
 ```bash
 reposwarm status --for-agent
-# Should show: temporal=healthy, dynamodb=healthy, api=healthy, ui=healthy
+docker ps --format '{{.Names}}\t{{.Status}}'
 ```
 
-### Step 3: Configure LLM provider
+## Step 3: Configure LLM Provider
 
 ```bash
 reposwarm config provider setup \
-  --for-agent \
   --non-interactive \
   --provider bedrock \
   --region us-east-1 \
@@ -62,47 +69,95 @@ reposwarm config provider setup \
   --pin
 ```
 
-**⚠️ Known issue:** Model alias resolution may produce incomplete model IDs. Verify and fix if needed:
+**Expected:**
+- `~/.reposwarm/temporal/worker.env` written with Bedrock config
+- Worker container restarted
+- Inference health check passes
+
+**Verify:**
 ```bash
-cat ~/.reposwarm/temporal/worker.env | grep ANTHROPIC_MODEL
-# Should be: ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
-# If not, fix manually:
-sed -i 's|ANTHROPIC_MODEL=.*|ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0|' ~/.reposwarm/temporal/worker.env
+reposwarm config provider show --for-agent
+cat ~/.reposwarm/temporal/worker.env
 ```
 
-Also set up an arch-hub directory and add it to worker env:
+### Known Issue: Model ID Resolution
+
+The `--pin` flag may resolve model aliases to short IDs (e.g., `us.anthropic.claude-sonnet-4-6`) instead of full versioned IDs (e.g., `us.anthropic.claude-sonnet-4-20250514-v1:0`). If the worker logs show "No Bedrock mapping for..." warnings:
+
 ```bash
-# Create local arch-hub
-mkdir -p /tmp/arch-hub && cd /tmp/arch-hub
-git init && git config user.email 'test@test.com' && git config user.name 'test'
-echo '# Architecture Hub' > README.md && git add . && git commit -m 'init'
-
-# Add to worker env
-echo 'ARCH_HUB_URL=/tmp/arch-hub' >> ~/.reposwarm/temporal/worker.env
-
-# Mount arch-hub into worker container (add to compose volumes)
-# In ~/.reposwarm/temporal/docker-compose.yml, under worker.volumes, add:
-#   - /tmp/arch-hub:/tmp/arch-hub
+# Fix manually
+sed -i 's|ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6|ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0|' \
+  ~/.reposwarm/temporal/worker.env
+cd ~/.reposwarm/temporal && docker compose restart worker
 ```
 
-Restart worker:
+## Step 4: Configure Arch-Hub
+
+Create or use an existing GitHub repository for architecture results:
+
 ```bash
+# Create arch-hub repo (one-time)
+gh repo create <org>/e2e-arch-hub --public --description "Architecture hub"
+```
+
+Configure the worker to push results there:
+
+```bash
+# Set arch-hub in CLI config
+reposwarm config set archHubUrl https://github.com/<org>/e2e-arch-hub.git
+
+# Set worker env vars (compose .env for variable substitution)
+cat >> ~/.reposwarm/temporal/.env << EOF
+ARCH_HUB_BASE_URL=https://github.com/<org>
+ARCH_HUB_REPO_NAME=e2e-arch-hub
+GITHUB_TOKEN=$(gh auth token)
+EOF
+
+# Restart worker to pick up new env
 cd ~/.reposwarm/temporal
 docker compose stop worker && docker compose rm -f worker && docker compose up -d worker
 ```
 
-### Step 4: Add a repo and investigate
+### Known Issue: OAuth Token Format
+
+The worker's `git_manager.py` uses `TOKEN@github.com` format for git auth, but `gho_` OAuth tokens (from `gh auth`) require `x-access-token:TOKEN@github.com`. If arch-hub push fails with "Authentication failed":
+
+```bash
+# Patch git_manager.py inside the container
+docker exec reposwarm-worker sed -i \
+  's|auth_netloc = f"{self.github_token}@{parsed.hostname}"|auth_netloc = f"x-access-token:{self.github_token}@{parsed.hostname}"|' \
+  /app/src/investigator/core/git_manager.py
+
+docker exec reposwarm-worker sed -i \
+  "s|auth_url = current_url.replace('https://', f'https://{self.github_token}@')|auth_url = current_url.replace('https://', f'https://x-access-token:{self.github_token}@')|" \
+  /app/src/investigator/core/git_manager.py
+
+# Note: This patch is lost on container recreate. Use a classic PAT (ghp_) to avoid this issue.
+```
+
+**Best practice:** Use a GitHub classic Personal Access Token (`ghp_*`) with `repo` scope instead of `gho_*` OAuth tokens.
+
+## Step 5: Add Repository and Investigate
 
 ```bash
 reposwarm repos add is-odd --url https://github.com/jonschlinkert/is-odd --source GitHub --for-agent
 reposwarm investigate is-odd --for-agent
 ```
 
-**Wait for completion** (2-5 min depending on cache):
+**Expected:**
+- Pre-flight checks pass
+- Investigation starts (Temporal workflow)
+- Worker clones repo, runs ~17 analysis steps via Bedrock
+- Results saved to API wiki store
+- `.arch.md` file pushed to arch-hub repository
+
+**Monitor progress:**
 ```bash
-# Poll workflow status
+# Watch workflow
 reposwarm wf list --for-agent --json
-# Wait until status = "Completed"
+
+# Watch worker logs
+docker logs -f reposwarm-worker 2>&1 | grep -E 'step:|saved|push|ERROR'
 ```
 
 **Verify results:**
@@ -110,144 +165,129 @@ reposwarm wf list --for-agent --json
 reposwarm results list --for-agent
 # Expected: is-odd with 17 sections
 
-reposwarm results sections is-odd --for-agent
-# Expected: hl_overview, module_deep_dive, dependencies, core_entities, DBs, APIs, events, etc.
+# Check arch-hub
+git clone https://github.com/<org>/e2e-arch-hub.git /tmp/check-arch-hub
+ls /tmp/check-arch-hub/
+# Expected: is-odd.arch.md (2000+ lines)
 ```
 
-### Step 5: Export results for ask CLI
+**Typical duration:** 3-8 minutes (with cache: ~2 minutes).
+
+## Step 6: Install Ask CLI
 
 ```bash
-reposwarm results export is-odd -d /tmp/arch-hub/is-odd --for-agent
-# Expected: ~75KB .arch.md file
+curl -fsSL https://raw.githubusercontent.com/reposwarm/ask/main/install.sh | sh
+ask version
 ```
 
-### Step 6: Set up ask CLI
+**Expected:** Version printed, binary at `/usr/local/bin/ask`.
+
+## Step 7: Set Up Ask + Askbox
 
 ```bash
 ask setup \
   --for-agent \
   --provider bedrock \
   --region us-east-1 \
+  --auth iam-role \
   --model sonnet \
-  --arch-hub /tmp/arch-hub \
-  --non-interactive \
+  --arch-hub https://github.com/<org>/e2e-arch-hub.git \
   --skip-docker
 ```
 
-**Fix env file model ID** (if alias not fully resolved):
-```bash
-sed -i 's|ANTHROPIC_MODEL=sonnet|ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0|' ~/.ask/askbox.env
-```
+**Expected:**
+- `~/.config/ask/config.json` created
+- `~/.ask/askbox.env` created (mode 0600)
+- `~/.ask/docker-compose.yml` created
 
-**Fix compose for local arch-hub** (bind mount instead of Docker volume):
-```bash
-cat > ~/.ask/docker-compose.yml << 'EOF'
-services:
-  askbox:
-    container_name: askbox
-    image: ghcr.io/reposwarm/askbox:latest
-    network_mode: host
-    env_file:
-      - askbox.env
-    environment:
-      - ASKBOX_PORT=8082
-    volumes:
-      - /tmp/arch-hub:/tmp/arch-hub
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-EOF
-```
+**Auto-detection:** If RepoSwarm is installed, `ask setup` (without flags) auto-detects `~/.reposwarm/temporal/worker.env` and offers to reuse provider settings.
 
-### Step 7: Start askbox and query
+## Step 8: Start Askbox
 
 ```bash
 ask up --for-agent
-# Wait 10s for healthcheck
-
 ask status --for-agent
-# Expected: healthy, arch-hub ready (1 repos)
 ```
 
-#### 7a: Browse results locally
+**Expected:**
+- Askbox container starts on port 8082
+- Health check shows `ready` with 1+ repos loaded
+- Arch-hub cloned automatically from configured URL
+
+## Step 9: Query Architecture Knowledge
 
 ```bash
-ask results list --path /tmp/arch-hub --for-agent
-# Expected: is-odd with sections
-
-ask results search 'dependencies' --path /tmp/arch-hub --for-agent --max 5
-# Expected: matches in is-odd arch docs
+# AI-powered question
+ask --for-agent "What does the is-odd library do and what are its dependencies?"
 ```
 
-#### 7b: Ask questions via askbox
+**Expected:**
+- Answer returned in 20-60 seconds
+- Uses tool calls to read arch-hub files
+- Comprehensive answer about is-odd's purpose, dependencies, and architecture
 
 ```bash
-ask --for-agent 'what does the is-odd package do and what are its main dependencies?'
-# Expected: detailed answer about is-odd functionality and deps (30-60s)
-
-ask --for-agent 'are there any security concerns with this package?'
-# Expected: security analysis based on arch docs (30-60s)
+# Browse results directly (no LLM, reads .arch.md files)
+ask results list --path /tmp/arch-hub
+ask results read is-odd --path /tmp/arch-hub | head -30
+ask results search "dependencies" --path /tmp/arch-hub | head -10
+ask results export is-odd --path /tmp/arch-hub -o /tmp/export.md
 ```
 
-#### 7c: Check job history
+**Expected:**
+- `list`: Shows 1 repo with sections
+- `read`: Displays architecture content
+- `search`: Finds matches across sections
+- `export`: Writes markdown file
+
+## Step 10: Docker Lifecycle
 
 ```bash
-ask list --for-agent
-# Expected: 2 completed jobs
+ask logs --for-agent          # View askbox logs
+ask down --for-agent          # Stop askbox
+ask status --for-agent        # Should show unhealthy/unreachable
+ask up --for-agent            # Restart
+ask status --for-agent        # Should show healthy again
 ```
 
-#### 7d: Export results
+## Cleanup
 
 ```bash
-ask results export is-odd --path /tmp/arch-hub -o /tmp/exported.arch.md --for-agent
-# Expected: exported markdown file
-```
+# Stop all containers
+ask down
+cd ~/.reposwarm/temporal && docker compose down -v
 
-### Step 8: Cleanup
+# Remove config
+rm -rf ~/.reposwarm ~/.config/ask ~/.ask
 
-```bash
-ask down --for-agent
-# Expected: askbox container stopped and removed
-
-# Stop reposwarm
-cd ~/.reposwarm/temporal && docker compose down
-
-# Verify clean
-docker ps -a
-# Expected: no containers running
+# Terminate EC2 instance (if temporary)
+# aws ec2 terminate-instances --instance-ids <id>
 ```
 
 ## Success Criteria
 
-| Step | Criterion |
-|------|-----------|
-| 1 | Both CLIs install and report version |
-| 2 | RepoSwarm local setup completes, all 4 services healthy |
-| 3 | Provider configured, worker env has correct model ID |
-| 4 | Investigation completes with 17 sections for is-odd |
-| 5 | Results exported to local .arch.md file |
-| 6 | ask setup creates config.json, askbox.env, docker-compose.yml |
-| 7a | `ask results list` shows repos from local arch-hub |
-| 7b | Two questions answered via askbox (both completed) |
-| 7c | `ask list` shows 2 completed jobs |
-| 7d | `ask results export` produces valid markdown file |
-| 8 | All containers stopped cleanly |
+| Step | Criteria | Status |
+|------|----------|--------|
+| RepoSwarm install | Binary available, `reposwarm version` works | ☐ |
+| Local setup | All 6 containers healthy | ☐ |
+| Provider config | Worker env configured, inference works | ☐ |
+| Investigation | 17 sections generated, `.arch.md` pushed to arch-hub | ☐ |
+| Ask install | Binary available, `ask version` works | ☐ |
+| Ask setup | Config + env + compose written | ☐ |
+| Askbox | Container healthy, arch-hub loaded | ☐ |
+| AI query | Answer returned with tool calls | ☐ |
+| Results browse | list/read/search/export all work | ☐ |
+| Docker lifecycle | up/down/logs/status all work | ☐ |
 
-## Known Issues
+## E2E Test Run Log (2026-03-07)
 
-1. **Model alias resolution:** `--model sonnet --pin` may produce `us.anthropic.claude-sonnet-4-6` instead of the full `us.anthropic.claude-sonnet-4-20250514-v1:0`. Manual fix needed in worker.env and askbox.env.
-2. **Arch-hub save activity:** Worker tries to `git clone` the arch-hub URL. Local filesystem paths work only with bind mounts. For production, use a GitHub/GitLab repo URL.
-3. **ask setup compose template:** Uses Docker volume for arch-hub by default. For local paths, replace with bind mount manually.
+**Instance:** i-071b54f2fb794ebb4 (t4g.medium, us-east-1, ARM64)
+**Duration:** ~45 minutes (including debugging)
+**Result:** ✅ All steps passed
 
-## Tested On
-
-- **Date:** 2026-03-07
-- **Instance:** i-071b54f2fb794ebb4 (t4g.medium, Ubuntu 24.04 ARM64)
-- **Region:** us-east-1
-- **RepoSwarm CLI:** commit 95700e9
-- **Ask CLI:** commit 3d957cd
-- **Askbox:** ghcr.io/reposwarm/askbox:latest
-- **LLM:** Bedrock Claude Sonnet 4 (us.anthropic.claude-sonnet-4-20250514-v1:0)
+Key findings:
+- Model alias resolution needs fix (short vs versioned IDs)
+- `gho_` OAuth tokens need `x-access-token:` prefix in worker git_manager.py
+- Worker needs `ARCH_HUB_BASE_URL` + `ARCH_HUB_REPO_NAME` env vars (not `ARCH_HUB_URL`)
+- `GITHUB_TOKEN` must be set in compose `.env` (not just `worker.env`) due to `${GITHUB_TOKEN:-}` in compose environment block
+- Investigation uses prompt cache — re-runs are faster (~2 min vs ~8 min first run)
