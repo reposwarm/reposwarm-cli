@@ -92,22 +92,66 @@ func newReposListCmd() *cobra.Command {
 }
 
 func newReposAddCmd() *cobra.Command {
-	var url, source string
+	var urlFlag, source string
 
 	cmd := &cobra.Command{
-		Use:   "add <name>",
+		Use:   "add <name-or-url>",
 		Short: "Add a repository to track",
-		Args:  friendlyExactArgs(1, "reposwarm repos add <name> --url <url>\n\nExample:\n  reposwarm repos add my-repo --url https://github.com/org/repo"),
+		Args:  friendlyExactArgs(1, "reposwarm repos add <url>\nreposwarm repos add <name> --url <url>\n\nExamples:\n  reposwarm repos add https://github.com/org/repo\n  reposwarm repos add my-repo --url https://github.com/org/repo"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
 			if err != nil {
 				return err
 			}
 
+			var name, url, finalSource string
+			arg := args[0]
+
+			// Check if args[0] is a URL
+			isURL := strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://")
+
+			if isURL {
+				// args[0] is a URL
+				if urlFlag != "" {
+					// --url overrides args[0] for the URL
+					url = urlFlag
+				} else {
+					url = arg
+				}
+
+				// Extract name from the URL (use the final URL)
+				parts := strings.Split(strings.TrimSuffix(url, "/"), "/")
+				if len(parts) > 0 {
+					name = parts[len(parts)-1]
+					// Remove .git suffix if present
+					name = strings.TrimSuffix(name, ".git")
+				}
+			} else {
+				// args[0] is a name
+				name = arg
+				if urlFlag != "" {
+					url = urlFlag
+				} else {
+					return fmt.Errorf("url is required: use 'reposwarm repos add <url>' or 'reposwarm repos add <name> --url <url>'")
+				}
+			}
+
+			// Determine final source
+			if cmd.Flags().Changed("source") {
+				finalSource = source
+			} else {
+				// Auto-detect from URL
+				if strings.Contains(url, "github.com") {
+					finalSource = "GitHub"
+				} else {
+					finalSource = "CodeCommit" // default
+				}
+			}
+
 			body := map[string]any{
-				"name":   args[0],
+				"name":   name,
 				"url":    url,
-				"source": source,
+				"source": finalSource,
 			}
 
 			var result any
@@ -118,13 +162,13 @@ func newReposAddCmd() *cobra.Command {
 			if flagJSON {
 				return output.JSON(result)
 			}
-			output.F.Success(fmt.Sprintf("Added repository %s", args[0]))
+			output.F.Success(fmt.Sprintf("Added repository %s", name))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&url, "url", "", "Repository URL")
-	cmd.Flags().StringVar(&source, "source", "CodeCommit", "Source (CodeCommit, GitHub)")
+	cmd.Flags().StringVar(&urlFlag, "url", "", "Repository URL (optional if URL provided as argument)")
+	cmd.Flags().StringVar(&source, "source", "CodeCommit", "Source (CodeCommit, GitHub) - auto-detected for GitHub URLs")
 	return cmd
 }
 
