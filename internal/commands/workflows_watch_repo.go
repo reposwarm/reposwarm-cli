@@ -453,8 +453,33 @@ func showOverviewProgress() error {
 		}
 	} else {
 		var anyRunning bool
+		// Find the most recently started single-repo workflow
+		var latestStart string
+		for _, w := range result.Executions {
+			if w.Type == "InvestigateSingleRepoWorkflow" && w.Status == "Running" {
+				if w.StartTime > latestStart {
+					latestStart = w.StartTime
+				}
+			}
+		}
+
+		// Only include workflows started within 5 minutes of the latest one
+		// This filters out stale workflows from previous runs
+		cutoff := ""
+		if latestStart != "" {
+			if t, err := time.Parse(time.RFC3339Nano, latestStart); err == nil {
+				cutoff = t.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+			} else if t, err := time.Parse("2006-01-02T15:04:05Z", latestStart); err == nil {
+				cutoff = t.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+			}
+		}
+
 		for _, w := range result.Executions {
 			if w.Type == "InvestigateSingleRepoWorkflow" {
+				// Filter: only include recent workflows (within 5 min of latest)
+				if cutoff != "" && w.StartTime < cutoff {
+					continue
+				}
 				if w.Status == "Running" {
 					anyRunning = true
 				}

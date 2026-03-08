@@ -364,7 +364,9 @@ func checkArchHub(cfg *config.Config, cfgErr error, isDocker bool) []preflightCh
 		checks = append(checks, preflightCheck{
 			"Arch-hub",
 			"fail",
-			"ARCH_HUB_BASE_URL not configured (still 'https://github.com/your-org')\n       Set it: reposwarm config worker-env set ARCH_HUB_BASE_URL https://github.com/YOUR-ORG",
+			"ARCH_HUB_BASE_URL not configured — investigation results won't be saved to git\n" +
+				"       Fix: reposwarm config worker-env set ARCH_HUB_BASE_URL https://github.com/YOUR-ORG\n" +
+				"       Or re-run setup: reposwarm new --local --arch-hub-url https://github.com/YOUR-ORG",
 		})
 		return checks
 	}
