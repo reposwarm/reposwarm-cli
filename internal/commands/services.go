@@ -334,47 +334,94 @@ func newStopCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "stop [service]",
-		Short: "Stop a RepoSwarm service",
-		Long: `Stop a RepoSwarm service. Tries the API first, falls back to local
+		Short: "Stop one or all RepoSwarm services",
+		Long: `Stop a RepoSwarm service or all services. Tries the API first, falls back to local
 process management if the API is unreachable.
 
 Examples:
-  reposwarm stop worker
-  reposwarm stop --local api    # Force local stop`,
-		Args:  friendlyExactArgs(1, "reposwarm stop <service>\n\nServices: api, worker, temporal, ui\n\nExample:\n  reposwarm stop worker"),
+  reposwarm stop              # Stop all services
+  reposwarm stop worker       # Stop only the worker
+  reposwarm stop --local api  # Force local stop`,
+		Args:  friendlyMaxArgs(1, "reposwarm stop [service]\n\nServices: api, worker, temporal, ui\n\nExamples:\n  reposwarm stop         # Stop all services\n  reposwarm stop worker  # Stop specific service"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc := args[0]
-			if !isKnownService(svc) {
-				return fmt.Errorf("unknown service: %s", svc)
+			// If no service specified, stop all services
+			var services []string
+			if len(args) == 0 {
+				services = knownServices
+			} else {
+				svc := args[0]
+				if !isKnownService(svc) {
+					return fmt.Errorf("unknown service: %s (must be one of: %s)",
+						svc, strings.Join(knownServices, ", "))
+				}
+				services = []string{svc}
 			}
 
-			// Try API first (unless --local or stopping the API itself)
-			if !local && svc != "api" {
-				client, err := getClient()
-				if err == nil {
-					var resp map[string]any
-					if err := client.Post(ctx(), "/services/"+svc+"/stop", nil, &resp); err == nil {
-						if flagJSON {
-							return output.JSON(resp)
+			// Try API first (unless --local)
+			var results []map[string]any
+			stoppedCount := 0
+
+			for _, svc := range services {
+				result := map[string]any{"service": svc}
+
+				// Try API first (unless --local or stopping the API itself)
+				if !local && svc != "api" {
+					client, err := getClient()
+					if err == nil {
+						var resp map[string]any
+						if err := client.Post(ctx(), "/services/"+svc+"/stop", nil, &resp); err == nil {
+							status, _ := resp["status"].(string)
+							result["status"] = status
+
+							if flagJSON {
+								results = append(results, result)
+							} else {
+								if status == "stopped" {
+									output.Successf("%s stopped", svc)
+									stoppedCount++
+								} else if status == "not_found" {
+									output.F.Info(fmt.Sprintf("%s is not running", svc))
+								} else {
+									output.F.Error(fmt.Sprintf("%s: unexpected status: %s", svc, status))
+								}
+							}
+							continue
 						}
-						status, _ := resp["status"].(string)
-						if status == "stopped" {
-							output.Successf("%s stopped", svc)
-						} else if status == "not_found" {
-							output.F.Info(fmt.Sprintf("%s is not running", svc))
-						} else {
-							output.F.Error(fmt.Sprintf("Unexpected status: %s", status))
+						if !flagJSON && len(services) == 1 {
+							output.F.Warning("API call failed, falling back to local stop...")
 						}
-						return nil
 					}
+				}
+
+				// Local fallback
+				if err := stopLocal(svc); err != nil {
+					result["status"] = "error"
+					result["error"] = err.Error()
 					if !flagJSON {
-						output.F.Warning("API call failed, falling back to local stop...")
+						output.F.Printf("  %s %s: %v\n", output.Red("✗"), svc, err)
 					}
+				} else {
+					result["status"] = "stopped"
+					stoppedCount++
+				}
+				if flagJSON {
+					results = append(results, result)
 				}
 			}
 
-			// Local fallback
-			return stopLocal(svc)
+			if flagJSON {
+				return output.JSON(map[string]any{
+					"stopped": stoppedCount,
+					"total":   len(services),
+					"results": results,
+				})
+			}
+
+			if len(services) > 1 && stoppedCount > 0 {
+				output.F.Println()
+				output.Successf("Stopped %d/%d services", stoppedCount, len(services))
+			}
+			return nil
 		},
 	}
 
