@@ -177,14 +177,92 @@ func newWorkflowsStatusCmd() *cobra.Command {
 
 func newWorkflowsTerminateCmd() *cobra.Command {
 	var yes bool
+	var all bool
 	var reason string
 
 	cmd := &cobra.Command{
-		Use:   "terminate <workflow-id>",
+		Use:   "terminate [workflow-id]",
 		Short: "Terminate a running workflow",
-		Args:  friendlyExactArgs(1, "reposwarm workflows terminate <workflow-id>\n\nExample:\n  reposwarm workflows terminate wf-12345"),
+		Long: `Terminate one or all running workflows.
+
+Examples:
+  reposwarm workflows terminate wf-12345
+  reposwarm workflows terminate --all --yes`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !yes {
+			if !all && len(args) == 0 {
+				return fmt.Errorf("specify a workflow ID or use --all\n\nExamples:\n  reposwarm workflows terminate <workflow-id>\n  reposwarm workflows terminate --all --yes")
+			}
+
+			client, err := getClient()
+			if err != nil {
+				return err
+			}
+
+			if all {
+				// Fetch running workflows
+				var wfResult api.WorkflowsResponse
+				if err := client.Get(ctx(), "/workflows?pageSize=100", &wfResult); err != nil {
+					return fmt.Errorf("fetching workflows: %w", err)
+				}
+
+				var running []api.WorkflowExecution
+				for _, w := range wfResult.Executions {
+					if strings.EqualFold(w.Status, "Running") {
+						running = append(running, w)
+					}
+				}
+
+				if len(running) == 0 {
+					if flagJSON {
+						return output.JSON(map[string]any{"terminated": 0})
+					}
+					output.F.Info("No running workflows to terminate")
+					return nil
+				}
+
+				if !yes && !flagJSON {
+					fmt.Printf("  Terminate %d running workflow(s)? [y/N] ", len(running))
+					var confirm string
+					fmt.Scanln(&confirm)
+					if strings.ToLower(confirm) != "y" {
+						output.F.Info("Cancelled")
+						return nil
+					}
+				}
+
+				terminated := 0
+				failed := 0
+				for _, w := range running {
+					body := map[string]string{"reason": reason}
+					var result any
+					if err := client.Post(ctx(), "/workflows/"+w.WorkflowID+"/terminate", body, &result); err != nil {
+						failed++
+						if !flagJSON {
+							output.F.Warning(fmt.Sprintf("Failed to terminate %s: %v", w.WorkflowID, err))
+						}
+						continue
+					}
+					terminated++
+					if !flagJSON {
+						output.F.Success(fmt.Sprintf("Terminated %s", w.WorkflowID))
+					}
+				}
+
+				if flagJSON {
+					return output.JSON(map[string]any{
+						"terminated": terminated,
+						"failed":    failed,
+						"total":     len(running),
+					})
+				}
+				output.F.Println()
+				output.Successf("Terminated %d/%d running workflows", terminated, len(running))
+				return nil
+			}
+
+			// Single workflow terminate
+			if !yes && !flagJSON {
 				fmt.Printf("  Terminate workflow %s? [y/N] ", args[0])
 				var confirm string
 				fmt.Scanln(&confirm)
@@ -192,11 +270,6 @@ func newWorkflowsTerminateCmd() *cobra.Command {
 					output.F.Info("Cancelled")
 					return nil
 				}
-			}
-
-			client, err := getClient()
-			if err != nil {
-				return err
 			}
 
 			body := map[string]string{"reason": reason}
@@ -214,6 +287,7 @@ func newWorkflowsTerminateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation")
+	cmd.Flags().BoolVar(&all, "all", false, "Terminate all running workflows")
 	cmd.Flags().StringVar(&reason, "reason", "Terminated via CLI", "Termination reason")
 	return cmd
 }

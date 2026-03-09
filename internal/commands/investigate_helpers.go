@@ -2,9 +2,16 @@ package commands
 
 import (
 	"fmt"
+	osexec "os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/reposwarm/reposwarm-cli/internal/api"
+	"github.com/reposwarm/reposwarm-cli/internal/bootstrap"
+	"github.com/reposwarm/reposwarm-cli/internal/config"
+	"github.com/reposwarm/reposwarm-cli/internal/output"
 )
 
 // checkRecentInvestigations returns a map of repo names that have completed
@@ -72,6 +79,94 @@ func checkRecentInvestigations(client *api.Client, repoNames []string) map[strin
 	}
 
 	return recentMap
+}
+
+// waitForWorkflow polls GET /workflows/<id> until the workflow reaches a terminal state.
+// Returns the final status string ("Completed", "Failed", etc.) and any error.
+func waitForWorkflow(client *api.Client, workflowID string, interval int) (string, error) {
+	for {
+		var wf api.WorkflowExecution
+		if err := client.Get(ctx(), "/workflows/"+workflowID, &wf); err != nil {
+			// Transient error — retry
+			time.Sleep(time.Duration(interval) * time.Second)
+			continue
+		}
+
+		lower := strings.ToLower(wf.Status)
+		if lower == "completed" || lower == "failed" || lower == "terminated" || lower == "timed_out" || lower == "cancelled" {
+			return wf.Status, nil
+		}
+
+		time.Sleep(time.Duration(interval) * time.Second)
+	}
+}
+
+// ensureWorkerParallel sets REPOSWARM_PARALLEL in worker.env and restarts the
+// worker if the value has changed. This is the mechanism by which the CLI
+// --parallel flag dynamically controls worker concurrency.
+func ensureWorkerParallel(client *api.Client, parallel int) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil // non-Docker install or no config — skip silently
+	}
+
+	installDir := cfg.EffectiveInstallDir()
+	if !bootstrap.IsDockerInstall(installDir) {
+		return nil // not a Docker install — nothing to configure
+	}
+
+	// Read current worker.env
+	envVars, err := bootstrap.ReadWorkerEnvFile(installDir)
+	if err != nil {
+		envVars = make(map[string]string)
+	}
+
+	desired := strconv.Itoa(parallel)
+	current := envVars["REPOSWARM_PARALLEL"]
+
+	if current == desired {
+		return nil // already set — no restart needed
+	}
+
+	// Check for running workflows before restarting
+	var wfResult api.WorkflowsResponse
+	if err := client.Get(ctx(), "/workflows?pageSize=50", &wfResult); err == nil {
+		for _, w := range wfResult.Executions {
+			if strings.EqualFold(w.Status, "Running") {
+				return fmt.Errorf("cannot change parallelism: workflow %s is still running\n  Wait for it to finish or terminate it first: reposwarm workflows terminate %s", w.WorkflowID, w.WorkflowID)
+			}
+		}
+	}
+
+	// Write new value
+	envVars["REPOSWARM_PARALLEL"] = desired
+	envPath := filepath.Join(installDir, bootstrap.ComposeSubDir, "worker.env")
+	if err := writeWorkerEnvMap(envPath, envVars); err != nil {
+		return fmt.Errorf("writing worker.env: %w", err)
+	}
+
+	// Also sync via API (best-effort)
+	body := map[string]string{"value": desired}
+	var resp any
+	_ = client.Put(ctx(), "/workers/worker-1/env/REPOSWARM_PARALLEL", body, &resp)
+
+	// Restart worker to pick up the new value
+	output.F.Info(fmt.Sprintf("Setting REPOSWARM_PARALLEL=%s, restarting worker...", desired))
+	composeDir := filepath.Join(installDir, bootstrap.ComposeSubDir)
+	stopCmd := osexec.Command("docker", "compose", "stop", "worker")
+	stopCmd.Dir = composeDir
+	stopCmd.CombinedOutput() // ignore error if already stopped
+
+	restartCmd := osexec.Command("docker", "compose", "up", "-d", "--force-recreate", "worker")
+	restartCmd.Dir = composeDir
+	if out, err := restartCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("could not restart worker: %v (%s)", err, string(out))
+	}
+
+	// Wait for worker to be ready
+	time.Sleep(5 * time.Second)
+	output.Successf("Worker restarted with REPOSWARM_PARALLEL=%s", desired)
+	return nil
 }
 
 // formatTimeAgo formats a duration as a human-readable "time ago" string.
