@@ -674,6 +674,8 @@ services:
       - TEMPORAL_HTTP_URL=http://temporal-ui:8080
       - TEMPORAL_NAMESPACE=default
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-local}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-local}
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
       - REPOSWARM_INSTALL_DIR=/data

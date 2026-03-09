@@ -68,6 +68,12 @@ type InvestigateRequest struct {
 	ChunkSize int    `json:"chunk_size"`
 }
 
+// InvestigateResponse from POST /investigate/single.
+type InvestigateResponse struct {
+	WorkflowID string `json:"workflowId"`
+	Message    string `json:"message"`
+}
+
 // InvestigateDailyRequest for POST /investigate/daily.
 type InvestigateDailyRequest struct {
 	Model         string `json:"model,omitempty"`

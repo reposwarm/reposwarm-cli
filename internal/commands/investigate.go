@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/reposwarm/reposwarm-cli/internal/api"
 	"github.com/reposwarm/reposwarm-cli/internal/config"
@@ -23,6 +24,8 @@ func newInvestigateCmd() *cobra.Command {
 Examples:
   reposwarm investigate is-odd              # Single repo
   reposwarm investigate --all               # All enabled repos
+  reposwarm investigate --all --parallel=1  # Sequential (one at a time)
+  reposwarm investigate --all --parallel=2  # Two repos at a time
   reposwarm investigate is-odd --model us.anthropic.claude-opus-4-6`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := getClient()
@@ -209,51 +212,210 @@ Examples:
 					recentlyInvestigated = checkRecentInvestigations(client, enabledRepos)
 				}
 
-				// Start individual investigations for each enabled repo
+				// When --parallel is explicitly set, configure worker and use sequential/batched dispatch
+				parallelSet := cmd.Flags().Changed("parallel")
+
+				if parallelSet {
+					// Dynamically configure worker concurrency
+					if err := ensureWorkerParallel(client, parallel); err != nil {
+						return err
+					}
+				}
+
+				// Start investigations for each enabled repo
 				started := 0
 				skipped := 0
-				for _, repoName := range enabledRepos {
-					// Skip if recently investigated (unless --force)
-					if timeAgo, wasRecent := recentlyInvestigated[repoName]; wasRecent {
-						skipped++
-						if !flagJSON {
-							output.F.Printf("  %s Skipping %s (investigated %s)\n",
-								output.Dim("⊘"), output.Bold(repoName), timeAgo)
-						}
-						continue
-					}
+				failed := 0
+				completed := 0
 
-					req := api.InvestigateRequest{
-						RepoName:  repoName,
-						Model:     model,
-						ChunkSize: chunkSize,
-					}
-					var result any
-					if err := client.Post(ctx(), "/investigate/single", req, &result); err != nil {
-						if !flagJSON {
-							output.F.Warning(fmt.Sprintf("Failed to start %s: %v", repoName, err))
+				if parallelSet && parallel <= 1 {
+					// --- Sequential mode: one repo at a time ---
+					total := len(enabledRepos)
+					for i, rn := range enabledRepos {
+						if timeAgo, wasRecent := recentlyInvestigated[rn]; wasRecent {
+							skipped++
+							if !flagJSON {
+								output.F.Printf("  %s Skipping %s (investigated %s)\n",
+									output.Dim("⊘"), output.Bold(rn), timeAgo)
+							}
+							continue
 						}
-						continue
+
+						if !flagJSON {
+							output.F.Printf("\n  [%d/%d] Starting %s...\n", i+1, total, output.Bold(rn))
+						}
+
+						req := api.InvestigateRequest{
+							RepoName:  rn,
+							Model:     model,
+							ChunkSize: chunkSize,
+						}
+						var resp api.InvestigateResponse
+						if err := client.Post(ctx(), "/investigate/single", req, &resp); err != nil {
+							failed++
+							if !flagJSON {
+								output.F.Warning(fmt.Sprintf("Failed to start %s: %v", rn, err))
+							}
+							continue
+						}
+						started++
+
+						// Wait for completion before starting the next repo
+						if resp.WorkflowID != "" {
+							if !flagJSON {
+								output.F.Printf("  %s Waiting for %s to finish...\n", output.Dim("⏳"), output.Bold(rn))
+							}
+							startTime := time.Now()
+							finalStatus, err := waitForWorkflow(client, resp.WorkflowID, 5)
+							elapsed := time.Since(startTime).Round(time.Second)
+							if err != nil {
+								if !flagJSON {
+									output.F.Warning(fmt.Sprintf("Error watching %s: %v", rn, err))
+								}
+							} else if strings.EqualFold(finalStatus, "Completed") {
+								completed++
+								if !flagJSON {
+									output.Successf("%s completed (%s)", output.Bold(rn), elapsed)
+								}
+							} else {
+								if !flagJSON {
+									output.F.Warning(fmt.Sprintf("%s finished with status: %s (%s)", rn, finalStatus, elapsed))
+								}
+							}
+						}
 					}
-					started++
-					if !flagJSON {
-						output.Successf("Investigation started for %s", output.Bold(repoName))
+				} else if parallelSet && parallel > 1 {
+					// --- Batched mode: N repos at a time ---
+					total := len(enabledRepos)
+					batchIdx := 0
+					for batchIdx < total {
+						end := batchIdx + parallel
+						if end > total {
+							end = total
+						}
+						batch := enabledRepos[batchIdx:end]
+
+						// Start all repos in this batch
+						type inflight struct {
+							name       string
+							workflowID string
+							startTime  time.Time
+						}
+						var active []inflight
+
+						for _, rn := range batch {
+							if timeAgo, wasRecent := recentlyInvestigated[rn]; wasRecent {
+								skipped++
+								if !flagJSON {
+									output.F.Printf("  %s Skipping %s (investigated %s)\n",
+										output.Dim("⊘"), output.Bold(rn), timeAgo)
+								}
+								continue
+							}
+
+							if !flagJSON {
+								output.F.Printf("  [batch %d-%d/%d] Starting %s...\n", batchIdx+1, end, total, output.Bold(rn))
+							}
+
+							req := api.InvestigateRequest{
+								RepoName:  rn,
+								Model:     model,
+								ChunkSize: chunkSize,
+							}
+							var resp api.InvestigateResponse
+							if err := client.Post(ctx(), "/investigate/single", req, &resp); err != nil {
+								failed++
+								if !flagJSON {
+									output.F.Warning(fmt.Sprintf("Failed to start %s: %v", rn, err))
+								}
+								continue
+							}
+							started++
+							if resp.WorkflowID != "" {
+								active = append(active, inflight{name: rn, workflowID: resp.WorkflowID, startTime: time.Now()})
+							}
+						}
+
+						// Wait for all in this batch to complete
+						for _, a := range active {
+							if !flagJSON {
+								output.F.Printf("  %s Waiting for %s...\n", output.Dim("⏳"), output.Bold(a.name))
+							}
+							finalStatus, err := waitForWorkflow(client, a.workflowID, 5)
+							elapsed := time.Since(a.startTime).Round(time.Second)
+							if err != nil {
+								if !flagJSON {
+									output.F.Warning(fmt.Sprintf("Error watching %s: %v", a.name, err))
+								}
+							} else if strings.EqualFold(finalStatus, "Completed") {
+								completed++
+								if !flagJSON {
+									output.Successf("%s completed (%s)", output.Bold(a.name), elapsed)
+								}
+							} else {
+								if !flagJSON {
+									output.F.Warning(fmt.Sprintf("%s finished with status: %s (%s)", a.name, finalStatus, elapsed))
+								}
+							}
+						}
+
+						batchIdx = end
+					}
+				} else {
+					// --- Default mode: fire-and-forget (existing behavior) ---
+					for _, repoName := range enabledRepos {
+						if timeAgo, wasRecent := recentlyInvestigated[repoName]; wasRecent {
+							skipped++
+							if !flagJSON {
+								output.F.Printf("  %s Skipping %s (investigated %s)\n",
+									output.Dim("⊘"), output.Bold(repoName), timeAgo)
+							}
+							continue
+						}
+
+						req := api.InvestigateRequest{
+							RepoName:  repoName,
+							Model:     model,
+							ChunkSize: chunkSize,
+						}
+						var result any
+						if err := client.Post(ctx(), "/investigate/single", req, &result); err != nil {
+							if !flagJSON {
+								output.F.Warning(fmt.Sprintf("Failed to start %s: %v", repoName, err))
+							}
+							continue
+						}
+						started++
+						if !flagJSON {
+							output.Successf("Investigation started for %s", output.Bold(repoName))
+						}
 					}
 				}
 
 				if flagJSON {
+					mode := "parallel"
+					if parallelSet && parallel <= 1 {
+						mode = "sequential"
+					} else if parallelSet {
+						mode = fmt.Sprintf("batched(%d)", parallel)
+					}
 					return output.JSON(map[string]any{
-						"started": started,
-						"skipped": skipped,
-						"total":   len(enabledRepos),
-						"repos":   enabledRepos,
+						"started":   started,
+						"completed": completed,
+						"skipped":   skipped,
+						"failed":    failed,
+						"total":     len(enabledRepos),
+						"repos":     enabledRepos,
+						"mode":      mode,
 					})
 				}
 				if started == 0 && skipped == 0 {
 					return fmt.Errorf("failed to start any investigations")
 				}
 				output.F.Println()
-				if skipped > 0 {
+				if parallelSet {
+					output.Successf("Completed %d/%d investigations (%d skipped, %d failed)", completed, len(enabledRepos), skipped, failed)
+				} else if skipped > 0 {
 					output.Successf("Started %d/%d investigations (%d skipped, use --force to override)", started, len(enabledRepos), skipped)
 				} else {
 					output.Successf("Started %d/%d investigations", started, len(enabledRepos))
@@ -268,7 +430,7 @@ Examples:
 	cmd.Flags().BoolVar(&all, "all", false, "Investigate all enabled repos")
 	cmd.Flags().StringVar(&model, "model", "", "Model ID (default from config)")
 	cmd.Flags().IntVar(&chunkSize, "chunk-size", 0, "Files per chunk (default from config)")
-	cmd.Flags().IntVar(&parallel, "parallel", 3, "Parallel limit (daily only)")
+	cmd.Flags().IntVar(&parallel, "parallel", 0, "Max parallel investigations (0=sequential, default=all-at-once when not set)")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip pre-flight checks and re-investigate recently completed repos")
 	cmd.Flags().BoolVar(&replace, "replace", false, "Terminate existing workflow for this repo before starting")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Run pre-flight only, don't create workflow")

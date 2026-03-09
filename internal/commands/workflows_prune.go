@@ -139,13 +139,17 @@ Examples:
 				}
 			}
 
-			// Terminate/delete each
+			// Delete each workflow from Temporal history
 			pruned := 0
 			for _, c := range candidates {
-				body := map[string]string{"reason": "Pruned via CLI"}
-				var termResult any
-				// Try terminate (for still-visible workflows)
-				_ = client.Post(ctx(), "/workflows/"+c.WorkflowID+"/terminate", body, &termResult)
+				var delResult any
+				if err := client.Delete(ctx(), "/workflows/"+c.WorkflowID, &delResult); err != nil {
+					// Fallback: try terminate then delete
+					body := map[string]string{"reason": "Pruned via CLI"}
+					var termResult any
+					_ = client.Post(ctx(), "/workflows/"+c.WorkflowID+"/terminate", body, &termResult)
+					_ = client.Delete(ctx(), "/workflows/"+c.WorkflowID, &delResult)
+				}
 				pruned++
 
 				if !flagJSON {
