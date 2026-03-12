@@ -26,6 +26,7 @@ func newConfigCmd() *cobra.Command {
 	cmd.AddCommand(newConfigProviderCmd())
 	cmd.AddCommand(newConfigModelCmd())
 	cmd.AddCommand(newConfigGitCmd())
+	cmd.AddCommand(newConfigArchHubCmd())
 	return cmd
 }
 

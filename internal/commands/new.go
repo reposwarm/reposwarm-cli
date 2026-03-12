@@ -94,6 +94,8 @@ Examples:
 					// Write arch-hub config if provided via flags
 					if archHubURL != "" || gitToken != "" {
 						writeArchHubEnv(dir, archHubURL, archHubRepo, gitToken)
+					} else {
+						setupDefaultLocalArchHub(dir)
 					}
 
 					return output.JSON(result)
@@ -124,6 +126,13 @@ Examples:
 							if gitToken != "" {
 								fmt.Println("OK: GITHUB_TOKEN=***set***")
 							}
+						} else {
+							localPath := setupDefaultLocalArchHub(dir)
+							fmt.Println()
+							fmt.Println("## Arch-Hub Configuration")
+							fmt.Printf("OK: ARCH_HUB_MODE=local (default)\n")
+							fmt.Printf("OK: ARCH_HUB_LOCAL_PATH=/data/arch-hub\n")
+							fmt.Printf("OK: Host path: %s\n", localPath)
 						}
 
 						fmt.Println()
@@ -711,6 +720,48 @@ func (p *spinnerPrinter) Printf(format string, args ...any) {
 		p.current = nil
 	}
 	fmt.Printf(format, args...)
+}
+
+// setupDefaultLocalArchHub sets up a default local arch-hub directory at
+// ~/.reposwarm/arch-hub/ for --local installs that don't specify --arch-hub-url.
+// Returns the absolute host path of the arch-hub directory.
+func setupDefaultLocalArchHub(installDir string) string {
+	home, _ := os.UserHomeDir()
+	archHubDir := filepath.Join(home, ".reposwarm", "arch-hub")
+	_ = os.MkdirAll(archHubDir, 0755)
+
+	composeDir := filepath.Join(installDir, bootstrap.ComposeSubDir)
+	envPath := filepath.Join(composeDir, "worker.env")
+
+	// Read existing env vars
+	existingEnv, _ := bootstrap.ReadWorkerEnvFile(installDir)
+	if existingEnv == nil {
+		existingEnv = make(map[string]string)
+	}
+	existingEnv["ARCH_HUB_MODE"] = "local"
+	existingEnv["ARCH_HUB_LOCAL_PATH"] = "/data/arch-hub"
+
+	// Write back
+	var lines []string
+	keys := make([]string, 0, len(existingEnv))
+	for k := range existingEnv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, existingEnv[k]))
+	}
+	_ = os.WriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"), 0600)
+
+	// Add bind mount to docker-compose.yml
+	_ = bootstrap.UpdateComposeWorkerMount(installDir, archHubDir, "/data/arch-hub")
+
+	// Restart worker to pick up new env + mount
+	restartCmd := exec.Command("docker", "compose", "up", "-d", "--force-recreate", "worker")
+	restartCmd.Dir = composeDir
+	_ = restartCmd.Run()
+
+	return archHubDir
 }
 
 // writeArchHubEnv writes arch-hub configuration to worker.env for non-interactive modes.

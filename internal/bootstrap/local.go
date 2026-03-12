@@ -763,3 +763,147 @@ func randomHex(n int) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// UpdateComposeWorkerMount adds or updates a bind mount for the worker service
+// in docker-compose.yml. If a mount with the same containerPath already exists,
+// it is replaced; otherwise it is appended.
+func UpdateComposeWorkerMount(installDir, hostPath, containerPath string) error {
+	composePath := filepath.Join(installDir, ComposeSubDir, "docker-compose.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("reading docker-compose.yml: %w", err)
+	}
+
+	mountLine := fmt.Sprintf("      - %s:%s", hostPath, containerPath)
+	lines := strings.Split(string(data), "\n")
+	var result []string
+
+	inWorker := false
+	inWorkerVolumes := false
+	replaced := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Detect top-level service keys (2-space indent under services)
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(trimmed, ":") {
+			if inWorkerVolumes && !replaced {
+				// Insert mount before leaving worker section
+				result = append(result, mountLine)
+				replaced = true
+			}
+			inWorker = trimmed == "worker:"
+			inWorkerVolumes = false
+		}
+
+		// Detect volumes: key inside worker
+		if inWorker && trimmed == "volumes:" {
+			inWorkerVolumes = true
+			result = append(result, line)
+			continue
+		}
+
+		// Inside worker volumes section
+		if inWorkerVolumes {
+			// Check if line is a volume entry (starts with "      - ")
+			if strings.HasPrefix(line, "      - ") {
+				// Check if this mount targets the same container path
+				entry := strings.TrimPrefix(trimmed, "- ")
+				parts := strings.SplitN(entry, ":", 2)
+				if len(parts) == 2 && parts[1] == containerPath {
+					// Replace this line
+					result = append(result, mountLine)
+					replaced = true
+					continue
+				}
+			} else if trimmed != "" {
+				// Exiting volumes section (non-volume line)
+				if !replaced {
+					result = append(result, mountLine)
+					replaced = true
+				}
+				inWorkerVolumes = false
+			}
+		}
+
+		result = append(result, line)
+	}
+
+	// If we never found a volumes section in worker, we need to add one
+	if !replaced {
+		// Find the worker service and add volumes section
+		var finalResult []string
+		inWorker = false
+		inserted := false
+		for i := 0; i < len(result); i++ {
+			line := result[i]
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(trimmed, ":") {
+				if inWorker && !inserted {
+					finalResult = append(finalResult, "    volumes:")
+					finalResult = append(finalResult, mountLine)
+					inserted = true
+				}
+				inWorker = trimmed == "worker:"
+			}
+			finalResult = append(finalResult, line)
+		}
+		if inWorker && !inserted {
+			finalResult = append(finalResult, "    volumes:")
+			finalResult = append(finalResult, mountLine)
+		}
+		result = finalResult
+	}
+
+	return os.WriteFile(composePath, []byte(strings.Join(result, "\n")), 0644)
+}
+
+// RemoveComposeWorkerMount removes a bind mount targeting the given containerPath
+// from the worker service in docker-compose.yml.
+func RemoveComposeWorkerMount(installDir, containerPath string) error {
+	composePath := filepath.Join(installDir, ComposeSubDir, "docker-compose.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("reading docker-compose.yml: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var result []string
+
+	inWorker := false
+	inWorkerVolumes := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect top-level service keys
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(trimmed, ":") {
+			inWorker = trimmed == "worker:"
+			inWorkerVolumes = false
+		}
+
+		if inWorker && trimmed == "volumes:" {
+			inWorkerVolumes = true
+			result = append(result, line)
+			continue
+		}
+
+		if inWorkerVolumes {
+			if strings.HasPrefix(line, "      - ") {
+				entry := strings.TrimPrefix(trimmed, "- ")
+				parts := strings.SplitN(entry, ":", 2)
+				if len(parts) == 2 && parts[1] == containerPath {
+					// Skip this line (remove the mount)
+					continue
+				}
+			} else if trimmed != "" {
+				inWorkerVolumes = false
+			}
+		}
+
+		result = append(result, line)
+	}
+
+	return os.WriteFile(composePath, []byte(strings.Join(result, "\n")), 0644)
+}

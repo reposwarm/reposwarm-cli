@@ -377,6 +377,26 @@ func checkArchHub(cfg *config.Config, cfgErr error, isDocker bool) []preflightCh
 	if repoName == "" {
 		repoName = "architecture-hub" // worker default
 	}
+	archHubMode := env["ARCH_HUB_MODE"]
+
+	// Local mode: just verify ARCH_HUB_LOCAL_PATH is set
+	if archHubMode == "local" {
+		localPath := env["ARCH_HUB_LOCAL_PATH"]
+		if localPath == "" {
+			checks = append(checks, preflightCheck{
+				"Arch-hub",
+				"fail",
+				"ARCH_HUB_MODE=local but ARCH_HUB_LOCAL_PATH not set",
+			})
+			return checks
+		}
+		checks = append(checks, preflightCheck{
+			"Arch-hub",
+			"ok",
+			fmt.Sprintf("local mode (container path: %s)", localPath),
+		})
+		return checks
+	}
 
 	// Check 1: ARCH_HUB_BASE_URL is configured (not default placeholder)
 	if baseURL == "" || baseURL == "https://github.com/your-org" {
