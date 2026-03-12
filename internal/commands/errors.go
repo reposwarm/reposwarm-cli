@@ -58,6 +58,7 @@ Examples:
 			}
 
 			var allErrors []WorkflowError
+			var failedWorkflowCount int
 			for _, w := range result.Executions {
 				if w.Type != "InvestigateSingleRepoWorkflow" {
 					continue
@@ -65,6 +66,12 @@ Examples:
 				name := repoName(w.WorkflowID)
 				if repo != "" && name != repo {
 					continue
+				}
+
+				// Count failed/terminated workflows at the workflow level
+				if w.Status == "Failed" || w.Status == "FAILED" ||
+				   w.Status == "Terminated" || w.Status == "TERMINATED" {
+					failedWorkflowCount++
 				}
 
 				errors := getWorkflowErrors(client, w.WorkflowID)
@@ -158,19 +165,33 @@ Examples:
 			}
 
 			if len(allErrors) == 0 && len(stalls) == 0 && len(workerErrors) == 0 {
-				if repo != "" {
-					output.F.Success(fmt.Sprintf("No errors or stalls found for '%s' 🎉", repo))
+				// Check if there are failed workflows but no activity-level errors captured
+				if failedWorkflowCount > 0 {
+					if repo != "" {
+						output.F.Warning(fmt.Sprintf("%d workflows failed for '%s' (no activity-level errors captured). Run: reposwarm wf list --status failed for details", failedWorkflowCount, repo))
+					} else {
+						output.F.Warning(fmt.Sprintf("%d workflows failed (no activity-level errors captured). Run: reposwarm wf list --status failed for details", failedWorkflowCount))
+					}
 				} else {
-					output.F.Success("No errors or stalls found in recent investigations 🎉")
+					if repo != "" {
+						output.F.Success(fmt.Sprintf("No errors or stalls found for '%s' 🎉", repo))
+					} else {
+						output.F.Success("No errors or stalls found in recent investigations 🎉")
+					}
 				}
 				return nil
 			}
 
 			if len(allErrors) == 0 {
-				if repo != "" {
-					output.F.Success(fmt.Sprintf("No errors found for '%s' 🎉", repo))
+				// Check for failed workflows even when we have stalls/worker errors
+				if failedWorkflowCount > 0 {
+					output.F.Warning(fmt.Sprintf("%d workflows failed (no activity-level errors captured). Run: reposwarm wf list --status failed for details", failedWorkflowCount))
 				} else {
-					output.F.Success("No errors found in recent investigations 🎉")
+					if repo != "" {
+						output.F.Success(fmt.Sprintf("No errors found for '%s' 🎉", repo))
+					} else {
+						output.F.Success("No errors found in recent investigations 🎉")
+					}
 				}
 				return nil
 			}

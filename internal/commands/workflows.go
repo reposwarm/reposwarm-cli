@@ -126,7 +126,7 @@ func newWorkflowsStatusCmd() *cobra.Command {
 					F.Warning(fmt.Sprintf("Could not fetch activity details: %v", err))
 				}
 
-				// Worker attribution — key diagnostic info
+				// Worker attribution — key diagnostic info (consistent with doctor)
 				F.Println()
 				F.Section("Worker Status")
 				workers := gatherWorkerInfo(client)
@@ -150,8 +150,9 @@ func newWorkflowsStatusCmd() *cobra.Command {
 						icon = output.Red("❌")
 					}
 					detail := w.Status
+					// Show full env error details like doctor does
 					if len(w.EnvErrors) > 0 {
-						detail += fmt.Sprintf(" (%d env errors)", len(w.EnvErrors))
+						detail += fmt.Sprintf(" (missing: %s)", strings.Join(w.EnvErrors, ", "))
 					}
 					F.Printf("  %s %s: %s\n", icon, w.Name, detail)
 				}

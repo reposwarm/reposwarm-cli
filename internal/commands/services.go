@@ -525,6 +525,27 @@ func restartLocalWithWait(svc string, wait bool, timeout int) error {
 		if !flagJSON {
 			output.Successf("%s is healthy", svc)
 		}
+
+		// Additional verification for worker: check env vars loaded
+		if svc == "worker" {
+			// Wait a bit for worker to fully initialize
+			time.Sleep(3 * time.Second)
+
+			// Check for env errors via API
+			client, err := getClient()
+			if err == nil {
+				workers := gatherWorkerInfo(client)
+				for _, w := range workers {
+					if len(w.EnvErrors) > 0 {
+						if !flagJSON {
+							output.F.Warning(fmt.Sprintf("Worker restarted but has env errors: %s", strings.Join(w.EnvErrors, ", ")))
+							output.F.Warning("Run: reposwarm doctor to diagnose")
+						}
+						break
+					}
+				}
+			}
+		}
 	}
 
 	return nil

@@ -581,8 +581,47 @@ func showOverviewProgress() error {
 
 	if len(running) > 0 {
 		output.F.Section("In Progress")
+
+		// Calculate aggregate step progress across all running repos
+		totalSteps := len(running) * len(investigationSteps)
+		completedSteps := 0
+
+		// Collect step progress for each repo
+		type repoProgress struct {
+			name      string
+			completed int
+			elapsed   string
+		}
+		var repoProgresses []repoProgress
+
 		for _, w := range running {
-			output.F.Printf("  %-35s %s elapsed\n", repoName(w.WorkflowID), elapsed(w.StartTime))
+			name := repoName(w.WorkflowID)
+			completed, _ := getCompletedSteps(client, name)
+			completedCount := 0
+			for _, step := range investigationSteps {
+				if completed[step.ID] {
+					completedCount++
+				}
+			}
+			completedSteps += completedCount
+			repoProgresses = append(repoProgresses, repoProgress{
+				name:      name,
+				completed: completedCount,
+				elapsed:   elapsed(w.StartTime),
+			})
+		}
+
+		// Show aggregate step progress
+		stepPct := 0
+		if totalSteps > 0 {
+			stepPct = completedSteps * 100 / totalSteps
+		}
+		output.F.Printf("Steps: %d/%d (%d%%) across %d repos\n\n", completedSteps, totalSteps, stepPct, len(running))
+
+		// Show per-repo detail with step counts
+		for _, rp := range repoProgresses {
+			output.F.Printf("  %-35s %d/%d steps   %s elapsed\n",
+				rp.name, rp.completed, len(investigationSteps), rp.elapsed)
 		}
 	}
 
@@ -591,6 +630,10 @@ func showOverviewProgress() error {
 		for _, w := range failed {
 			output.F.Printf("  %-35s %s\n", repoName(w.WorkflowID), duration(w))
 		}
+		// Add hint about pruning if there are old failed workflows
+		output.F.Println()
+		output.F.Printf("%s %d failed from earlier runs — dismiss with: %s\n",
+			output.Dim("\u2192"), len(failed), output.Cyan("reposwarm wf prune --status failed"))
 	}
 
 	if pending > 0 {

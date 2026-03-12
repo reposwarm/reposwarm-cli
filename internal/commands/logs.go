@@ -17,6 +17,7 @@ import (
 func newLogsCmd() *cobra.Command {
 	var tail bool
 	var lines int
+	var since string
 
 	cmd := &cobra.Command{
 		Use:   "logs [service]",
@@ -31,7 +32,7 @@ If no service is specified, shows logs from all services.`,
 			// Check for Docker install — use docker compose logs directly
 			cfg, _ := config.Load()
 			if cfg != nil && (cfg.IsDockerInstall() || bootstrap.IsDockerInstall(cfg.EffectiveInstallDir())) {
-				return showDockerLogs(cfg.EffectiveInstallDir(), args, lines, tail)
+				return showDockerLogs(cfg.EffectiveInstallDir(), args, lines, tail, since)
 			}
 
 			client, err := getClient()
@@ -117,17 +118,26 @@ If no service is specified, shows logs from all services.`,
 	}
 
 	cmd.Flags().BoolVarP(&tail, "follow", "f", false, "Follow/stream logs")
-	cmd.Flags().IntVarP(&lines, "tail", "n", 50, "Number of lines to show from end of logs")
+	cmd.Flags().IntVarP(&lines, "tail", "n", 200, "Number of lines to show from end of logs")
+	cmd.Flags().StringVar(&since, "since", "", "Show logs since timestamp (e.g., 30m, 1h) for Docker installs")
 	return cmd
 }
 
-func showDockerLogs(installDir string, args []string, lines int, tail bool) error {
+func showDockerLogs(installDir string, args []string, lines int, tail bool, since string) error {
 	composeDir := filepath.Join(installDir, config.ComposeSubDir)
 	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
 		return fmt.Errorf("docker-compose.yml not found at %s", composeDir)
 	}
 
-	cmdArgs := []string{"compose", "logs", "--tail", strconv.Itoa(lines)}
+	cmdArgs := []string{"compose", "logs"}
+
+	// If --since is provided, use it; otherwise use --tail
+	if since != "" {
+		cmdArgs = append(cmdArgs, "--since", since)
+	} else {
+		cmdArgs = append(cmdArgs, "--tail", strconv.Itoa(lines))
+	}
+
 	if tail {
 		cmdArgs = append(cmdArgs, "-f")
 	}

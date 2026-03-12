@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/reposwarm/reposwarm-cli/internal/api"
 	"github.com/reposwarm/reposwarm-cli/internal/config"
@@ -13,7 +14,7 @@ import (
 func newInvestigateCmd() *cobra.Command {
 	var model string
 	var chunkSize, parallel int
-	var all, force, replace, dryRun bool
+	var all, force, replace, dryRun, wait bool
 
 	cmd := &cobra.Command{
 		Use:   "investigate [repo]",
@@ -128,10 +129,22 @@ Examples:
 				if err := client.Post(ctx(), "/investigate/single", req, &result); err != nil {
 					return err
 				}
-				if flagJSON {
+				if flagJSON && !wait {
 					return output.JSON(result)
 				}
-				output.Successf("Investigation started for %s", output.Bold(repoArg))
+				if !flagJSON {
+					output.Successf("Investigation started for %s", output.Bold(repoArg))
+				}
+
+				// If --wait, watch the progress
+				if wait {
+					if !flagJSON {
+						output.F.Info("Watching progress...")
+						output.F.Println()
+					}
+					// Call the existing showRepoProgress function with wait=true
+					return showRepoProgress(repoArg, true)
+				}
 				return nil
 			}
 
@@ -241,7 +254,7 @@ Examples:
 					}
 				}
 
-				if flagJSON {
+				if flagJSON && !wait {
 					return output.JSON(map[string]any{
 						"started": started,
 						"skipped": skipped,
@@ -252,11 +265,55 @@ Examples:
 				if started == 0 && skipped == 0 {
 					return fmt.Errorf("failed to start any investigations")
 				}
-				output.F.Println()
-				if skipped > 0 {
-					output.Successf("Started %d/%d investigations (%d skipped, use --force to override)", started, len(enabledRepos), skipped)
-				} else {
-					output.Successf("Started %d/%d investigations", started, len(enabledRepos))
+				if !flagJSON {
+					output.F.Println()
+					if skipped > 0 {
+						output.Successf("Started %d/%d investigations (%d skipped, use --force to override)", started, len(enabledRepos), skipped)
+					} else {
+						output.Successf("Started %d/%d investigations", started, len(enabledRepos))
+					}
+				}
+
+				// If --wait, poll until all workflows complete
+				if wait {
+					if !flagJSON {
+						output.F.Info("Watching progress...")
+						output.F.Println()
+					}
+
+					// Poll every 10 seconds
+					for {
+						// Get current workflow statuses
+						var result api.WorkflowsResponse
+						if err := client.Get(ctx(), "/workflows?pageSize=100", &result); err != nil {
+							return err
+						}
+
+						// Count running workflows
+						runningCount := 0
+						for _, w := range result.Executions {
+							if w.Type == "InvestigateSingleRepoWorkflow" && w.Status == "Running" {
+								runningCount++
+							}
+						}
+
+						// Show overview progress
+						if err := showOverviewProgress(); err != nil {
+							return err
+						}
+
+						// Exit when no more running workflows
+						if runningCount == 0 {
+							if !flagJSON {
+								output.F.Println()
+								output.Successf("All investigations complete!")
+							}
+							break
+						}
+
+						// Wait before next poll
+						time.Sleep(10 * time.Second)
+					}
 				}
 				return nil
 			}
@@ -272,5 +329,6 @@ Examples:
 	cmd.Flags().BoolVar(&force, "force", false, "Skip pre-flight checks and re-investigate recently completed repos")
 	cmd.Flags().BoolVar(&replace, "replace", false, "Terminate existing workflow for this repo before starting")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Run pre-flight only, don't create workflow")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Wait and watch progress until investigation completes")
 	return cmd
 }
