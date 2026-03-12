@@ -311,8 +311,27 @@ func checkRepoAccess(repo string) preflightCheck {
 		}
 	}
 
-	// If repo has no slash, it's just a name — we can't verify it
+	// If repo has no slash, it's just a name — try looking up the URL from the API
 	if !strings.Contains(repo, "/") {
+		// Try fetching the repo's URL from the RepoSwarm API
+		if apiClient, err := getClient(); err == nil {
+			var repoResp struct {
+				Name string `json:"name"`
+				URL  string `json:"url"`
+			}
+			if err := apiClient.Get(context.Background(), "/repos/"+repo, &repoResp); err == nil && repoResp.URL != "" {
+				// Extract owner/repo from the URL
+				if strings.Contains(repoResp.URL, "github.com/") {
+					parts := strings.TrimPrefix(repoResp.URL, "https://github.com/")
+					parts = strings.TrimPrefix(parts, "http://github.com/")
+					parts = strings.TrimSuffix(parts, ".git")
+					if strings.Contains(parts, "/") {
+						// Re-check with the full owner/repo
+						return checkRepoAccess(parts)
+					}
+				}
+			}
+		}
 		return preflightCheck{"Repository", "warn", fmt.Sprintf("'%s' — cannot verify accessibility (no owner/repo format)", repo)}
 	}
 
