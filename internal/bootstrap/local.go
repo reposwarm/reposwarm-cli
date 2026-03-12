@@ -695,6 +695,7 @@ services:
   worker:
     container_name: reposwarm-worker
     image: ghcr.io/reposwarm/worker:latest
+    restart: on-failure
     network_mode: host
     env_file:
       - path: ./worker.env
