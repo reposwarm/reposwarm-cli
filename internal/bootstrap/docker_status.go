@@ -151,6 +151,9 @@ func CleanupOldProjectContainers() {
 }
 
 // WaitForDockerHealth waits for a Docker container to report healthy status.
+// For containers with a healthcheck, it waits for health="healthy".
+// For containers without a healthcheck (health=""), it polls twice with a gap
+// to verify the container stays in "running" state (not just momentarily).
 // Returns nil if healthy within timeout, error otherwise.
 func WaitForDockerHealth(installDir, service string, timeoutSec int) error {
 	composeDir := filepath.Join(installDir, ComposeSubDir)
@@ -165,8 +168,26 @@ func WaitForDockerHealth(installDir, service string, timeoutSec int) error {
 			if json.Unmarshal(bytes.TrimSpace(out), &raw) == nil {
 				health := strings.ToLower(raw.Health)
 				state := strings.ToLower(raw.State)
-				if health == "healthy" || (health == "" && state == "running") {
+				if health == "healthy" {
 					return nil
+				}
+				// For containers without a healthcheck, verify stability
+				if health == "" && state == "running" {
+					// Wait and re-check to confirm the container stays running
+					time.Sleep(3 * time.Second)
+					cmd2 := exec.Command("docker", "compose", "ps", "--format", "json", service)
+					cmd2.Dir = composeDir
+					out2, err2 := cmd2.Output()
+					if err2 == nil && len(out2) > 0 {
+						var raw2 dockerServiceJSON
+						if json.Unmarshal(bytes.TrimSpace(out2), &raw2) == nil {
+							state2 := strings.ToLower(raw2.State)
+							if state2 == "running" {
+								return nil
+							}
+							return fmt.Errorf("container %s exited after starting (state: %s)", service, state2)
+						}
+					}
 				}
 			}
 		}
