@@ -119,6 +119,8 @@ If no service is specified, shows logs from all services.`,
 
 	cmd.Flags().BoolVarP(&tail, "follow", "f", false, "Follow/stream logs")
 	cmd.Flags().IntVarP(&lines, "tail", "n", 200, "Number of lines to show from end of logs")
+	cmd.Flags().IntVar(&lines, "lines", 200, "Number of lines (alias for --tail)")
+	cmd.Flags().MarkHidden("lines")
 	cmd.Flags().StringVar(&since, "since", "", "Show logs since timestamp (e.g., 30m, 1h) for Docker installs")
 	return cmd
 }
