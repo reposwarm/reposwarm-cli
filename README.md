@@ -174,45 +174,136 @@ reposwarm doctor
 
 ### 🔧 Configure LLM Provider
 
+RepoSwarm supports three provider backends:
+
+| Provider | Auth | Best for |
+|----------|------|----------|
+| `anthropic` | API key | Direct Anthropic API access |
+| `bedrock` | AWS credentials (IAM role, access keys, SSO, profile, or Bedrock API keys) | AWS-native environments |
+| `litellm` | Proxy URL + optional key | **OpenAI, Gemini, Mistral, and 100+ other models** via [LiteLLM](https://github.com/BerriAI/litellm) proxy |
+
+> **OpenAI and Gemini** are not built-in providers — use `litellm` to route to them. See the [LiteLLM section](#using-openai-gemini-or-other-models-via-litellm) below.
+
+#### Anthropic (Direct API)
+
 ```bash
-# Interactive setup (walks through provider, model, region)
+# Interactive
 reposwarm config provider setup
 
-# Non-interactive: switch to Amazon Bedrock with Opus
+# Non-interactive
+reposwarm config provider setup \
+  --provider anthropic \
+  --api-key sk-ant-api03-YOUR-KEY \
+  --model sonnet \
+  --non-interactive
+```
+
+#### Amazon Bedrock
+
+```bash
+# IAM role (EC2 instance profile / ECS task role — recommended)
 reposwarm config provider setup \
   --provider bedrock \
+  --auth-method iam-role \
   --region us-east-1 \
   --model opus \
-  --auth-method iam-role \
   --non-interactive
 
-# Bedrock with AWS access keys
+# AWS access keys
 reposwarm config provider setup \
   --provider bedrock \
   --auth-method access-keys \
   --aws-key AKIA... \
   --aws-secret wJalr... \
   --region us-east-1 \
+  --model sonnet \
   --non-interactive
 
-# Bedrock with API keys (from AWS console → Bedrock → API keys)
+# AWS SSO / Identity Center
+reposwarm config provider setup \
+  --provider bedrock \
+  --auth-method sso \
+  --aws-profile my-sso-profile \
+  --region us-west-2 \
+  --model sonnet \
+  --non-interactive
+
+# Named AWS profile (~/.aws/credentials)
+reposwarm config provider setup \
+  --provider bedrock \
+  --auth-method profile \
+  --aws-profile prod \
+  --region us-east-1 \
+  --model opus \
+  --non-interactive
+
+# Bedrock API keys (from AWS Console → Bedrock → API keys)
 reposwarm config provider setup \
   --provider bedrock \
   --auth-method api-keys \
   --bedrock-key br-... \
   --region us-east-1 \
+  --model sonnet \
+  --non-interactive
+```
+
+> **How IAM role auth works in Docker:** The worker container runs with `network_mode: host`, sharing the host's network stack. This lets the AWS SDK inside the container transparently access EC2 instance metadata (IMDSv2) or any credentials configured on the host (`~/.aws/`), exactly like it would in ECS Fargate. No credential injection or special configuration needed.
+
+#### Using OpenAI, Gemini, or Other Models via LiteLLM
+
+RepoSwarm uses Claude under the hood, so non-Anthropic models require a [LiteLLM](https://github.com/BerriAI/litellm) proxy to translate between APIs. LiteLLM supports 100+ models including OpenAI, Gemini, Mistral, Cohere, and more.
+
+**1. Start a LiteLLM proxy** (one-time setup):
+
+```bash
+pip install litellm
+
+# OpenAI
+litellm --model openai/gpt-4o --port 4000
+
+# Google Gemini
+GEMINI_API_KEY=your-key litellm --model gemini/gemini-2.5-pro --port 4000
+
+# Or use a config file for multiple models:
+# See https://docs.litellm.ai/docs/proxy/configs
+litellm --config litellm_config.yaml --port 4000
+```
+
+**2. Point RepoSwarm at the proxy:**
+
+```bash
+# OpenAI via LiteLLM
+reposwarm config provider setup \
+  --provider litellm \
+  --proxy-url http://localhost:4000 \
+  --proxy-key sk-your-litellm-key \
+  --model openai/gpt-4o \
   --non-interactive
 
-# Non-interactive: use LiteLLM proxy
+# Google Gemini via LiteLLM
+reposwarm config provider setup \
+  --provider litellm \
+  --proxy-url http://localhost:4000 \
+  --model gemini/gemini-2.5-pro \
+  --non-interactive
+
+# Any other LiteLLM-supported model
 reposwarm config provider setup \
   --provider litellm \
   --proxy-url https://my-proxy.example.com \
   --proxy-key sk-proxy-key \
-  --model sonnet \
+  --model mistral/mistral-large-latest \
   --non-interactive
+```
 
+> **Note:** Investigation quality may vary with non-Claude models. RepoSwarm's prompts and workflows are optimized for Claude Sonnet/Opus.
+
+#### Provider Management
+
+```bash
 # Quick-switch provider (keeps other settings)
 reposwarm config provider set bedrock
+reposwarm config provider set anthropic --check
 
 # Check what's configured (detects CLI vs worker drift)
 reposwarm config provider show
@@ -226,8 +317,6 @@ reposwarm config model pin
 # Restart worker to apply changes
 reposwarm restart worker
 ```
-
-> **How IAM role auth works in Docker:** The worker container runs with `network_mode: host`, sharing the host's network stack. This lets the AWS SDK inside the container transparently access EC2 instance metadata (IMDSv2) or any credentials configured on the host (`~/.aws/`), exactly like it would in ECS Fargate. No credential injection or special configuration needed.
 
 ### 🔧 Configure Git Provider
 
