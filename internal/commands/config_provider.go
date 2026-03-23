@@ -42,6 +42,7 @@ func newProviderSetupCmd() *cobra.Command {
 		awsKeyFlag        string
 		awsSecretFlag     string
 		bedrockAPIKeyFlag string
+		apiKeyFlag        string
 	)
 
 	cmd := &cobra.Command{
@@ -78,6 +79,7 @@ Examples:
 			awsKey := awsKeyFlag
 			awsSecret := awsSecretFlag
 			bedrockAPIKey := bedrockAPIKeyFlag
+			apiKey := apiKeyFlag
 
 			if !nonInterFlag && !flagAgent && provider == "" {
 				// Interactive mode
@@ -141,6 +143,14 @@ Examples:
 						}
 					}
 
+				case config.ProviderAnthropic:
+					if apiKey == "" {
+						apiKey = os.Getenv("ANTHROPIC_API_KEY")
+					}
+					if apiKey == "" {
+						apiKey = promptString(reader, "Anthropic API Key", "")
+					}
+
 				case config.ProviderLiteLLM:
 					if proxyURL == "" {
 						proxyURL = promptString(reader, "LiteLLM proxy URL", "http://localhost:4000")
@@ -192,6 +202,13 @@ Examples:
 				   config.BedrockAuthMethod(authMethod) == config.BedrockAuthSSO {
 					cfg.ProviderConfig.AWSProfile = awsProfile
 				}
+
+			case config.ProviderAnthropic:
+				// Source API key from flag, env var, or config
+				if apiKey == "" {
+					apiKey = os.Getenv("ANTHROPIC_API_KEY")
+				}
+				cfg.ProviderConfig.APIKey = apiKey
 
 			case config.ProviderLiteLLM:
 				cfg.ProviderConfig.ProxyURL = proxyURL
@@ -253,7 +270,7 @@ Examples:
 				composeDir := getComposeDir(cfgLocal)
 				if composeDir != "" {
 					workerEnvPath := filepath.Join(composeDir, "worker.env")
-					if err := writeWorkerEnv(workerEnvPath, workerVars); err != nil {
+					if err := writeWorkerEnvForProvider(workerEnvPath, workerVars, provider); err != nil {
 						if !flagJSON {
 							output.F.Warning(fmt.Sprintf("Could not write worker.env: %v", err))
 						}
@@ -447,6 +464,7 @@ Examples:
 	cmd.Flags().StringVar(&awsKeyFlag, "aws-key", "", "AWS access key ID (for access-keys auth)")
 	cmd.Flags().StringVar(&awsSecretFlag, "aws-secret", "", "AWS secret access key (for access-keys auth)")
 	cmd.Flags().StringVar(&bedrockAPIKeyFlag, "bedrock-key", "", "Bedrock API key (for api-keys auth)")
+	cmd.Flags().StringVar(&apiKeyFlag, "api-key", "", "Anthropic API key (for anthropic provider)")
 	return cmd
 }
 
@@ -540,7 +558,7 @@ func newProviderSetCmd() *cobra.Command {
 			if bootstrap.IsDockerInstall(installDir) {
 				composeDir := filepath.Join(installDir, bootstrap.ComposeSubDir)
 				workerEnvPath := filepath.Join(composeDir, "worker.env")
-				if err := writeWorkerEnv(workerEnvPath, workerVars); err != nil {
+				if err := writeWorkerEnvForProvider(workerEnvPath, workerVars, provider); err != nil {
 					if !flagJSON {
 						output.F.Warning(fmt.Sprintf("Could not write worker.env: %v", err))
 					}
@@ -952,6 +970,21 @@ func verifyWrittenWorkerEnv(envPath string, expected map[string]string) (bool, [
 // writeWorkerEnv writes/merges env vars to a worker.env file.
 // Existing vars not in the new map are preserved.
 func writeWorkerEnv(path string, vars map[string]string) error {
+	return writeWorkerEnvForProvider(path, vars, "")
+}
+
+// providerExclusiveVars maps provider-specific env vars that should be removed
+// when switching to a different provider.
+var providerExclusiveVars = map[string][]string{
+	"bedrock":   {"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_PROVIDER", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BEARER_TOKEN_BEDROCK", "AWS_PROFILE"},
+	"anthropic": {"ANTHROPIC_API_KEY"},
+	"litellm":   {"ANTHROPIC_BASE_URL"},
+}
+
+// writeWorkerEnvForProvider writes/merges env vars to a worker.env file.
+// If activeProvider is set, removes exclusive vars from other providers.
+// Existing vars not in the new map and not exclusive to other providers are preserved.
+func writeWorkerEnvForProvider(path string, vars map[string]string, activeProvider string) error {
 	existing := make(map[string]string)
 
 	// Read existing file if present
@@ -963,6 +996,21 @@ func writeWorkerEnv(path string, vars map[string]string) error {
 			}
 			if i := strings.Index(line, "="); i > 0 {
 				existing[line[:i]] = line[i+1:]
+			}
+		}
+	}
+
+	// Remove exclusive vars from other providers
+	if activeProvider != "" {
+		for prov, exclusiveKeys := range providerExclusiveVars {
+			if prov == activeProvider {
+				continue
+			}
+			for _, key := range exclusiveKeys {
+				// Only remove if the new vars don't explicitly set this key
+				if _, inNew := vars[key]; !inNew {
+					delete(existing, key)
+				}
 			}
 		}
 	}

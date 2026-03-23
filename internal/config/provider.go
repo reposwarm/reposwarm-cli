@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Provider represents an LLM provider backend.
 type Provider string
@@ -57,6 +60,7 @@ type ProviderConfig struct {
 	AWSRegion    string            `json:"awsRegion,omitempty"`
 	BedrockAuth  BedrockAuthMethod `json:"bedrockAuth,omitempty"`
 	AWSProfile   string            `json:"awsProfile,omitempty"`
+	APIKey       string            `json:"apiKey,omitempty"`
 	ProxyURL     string            `json:"proxyUrl,omitempty"`
 	ProxyKey     string            `json:"proxyKey,omitempty"`
 	SmallModel   string            `json:"smallModel,omitempty"`
@@ -200,6 +204,16 @@ func WorkerEnvVars(pc *ProviderConfig, model string) map[string]string {
 					vars[envVar] = pinned
 				}
 			}
+		}
+
+	case ProviderAnthropic:
+		// Source API key from config, then fall back to environment
+		apiKey := pc.APIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		if apiKey != "" {
+			vars["ANTHROPIC_API_KEY"] = apiKey
 		}
 
 	case ProviderLiteLLM:

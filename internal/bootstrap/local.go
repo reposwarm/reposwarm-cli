@@ -674,6 +674,8 @@ services:
       - TEMPORAL_HTTP_URL=http://temporal-ui:8080
       - TEMPORAL_NAMESPACE=default
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-fakeAccessKey}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-fakeSecretKey}
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
       - REPOSWARM_INSTALL_DIR=/data
@@ -705,6 +707,8 @@ services:
       - TEMPORAL_NAMESPACE=default
       - TEMPORAL_TASK_QUEUE=investigate-task-queue
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-fakeAccessKey}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-fakeSecretKey}
       - DYNAMODB_ENDPOINT=http://localhost:8000
       - DYNAMODB_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
       - LOCAL_TESTING=true
@@ -719,6 +723,8 @@ services:
     environment:
       - TEMPORAL_SERVER_URL=http://temporal-ui:8080
       - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-fakeAccessKey}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-fakeSecretKey}
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_CACHE_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
     depends_on:
