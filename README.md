@@ -615,7 +615,7 @@ reposwarm services --json | jq '.[] | {name, status, pid}'
 | `reposwarm repos add <name>` | Add repo (`--url`, `--source`) |
 | `reposwarm repos remove <name>` | Remove (`-y` skip confirm) |
 | `reposwarm repos enable/disable <name>` | Toggle investigation eligibility |
-| `reposwarm repos discover` | Auto-discover CodeCommit repos |
+| `reposwarm repos discover` | Auto-discover repos from your configured git provider (GitHub, GitLab, CodeCommit, Azure DevOps, Bitbucket) |
 
 ### Investigation & Workflows
 
