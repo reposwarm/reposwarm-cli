@@ -220,6 +220,40 @@ func TestDiscoverCmd(t *testing.T) {
 	}
 }
 
+func TestDiscoverCmdWithSource(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"POST /repos/discover": map[string]any{
+			"success": true, "discovered": 10, "added": 2, "skipped": 8, "total": 10,
+		},
+	})
+	defer cleanup()
+
+	out, err := runCmd(t, "repos", "discover", "--source", "github")
+	if err != nil {
+		t.Fatalf("repos discover --source github: %v", err)
+	}
+	if !strings.Contains(out, "10") {
+		t.Errorf("output should mention 10 repos: %s", out)
+	}
+}
+
+func TestDiscoverCmdWithOrg(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"POST /repos/discover": map[string]any{
+			"success": true, "discovered": 5, "added": 5, "skipped": 0, "total": 5,
+		},
+	})
+	defer cleanup()
+
+	out, err := runCmd(t, "repos", "discover", "--source", "github", "--org", "myorg")
+	if err != nil {
+		t.Fatalf("repos discover --org: %v", err)
+	}
+	if !strings.Contains(out, "5") {
+		t.Errorf("output should mention 5 repos: %s", out)
+	}
+}
+
 func TestDiscoverCmdJSON(t *testing.T) {
 	_, cleanup := testServer(t, map[string]any{
 		"POST /repos/discover": map[string]any{

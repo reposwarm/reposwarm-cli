@@ -667,6 +667,9 @@ services:
     image: ghcr.io/reposwarm/api:latest
     ports:
       - "${API_PORT:-3000}:3000"
+    env_file:
+      - path: ./worker.env
+        required: false
     environment:
       - PORT=3000
       - API_BEARER_TOKEN=${API_BEARER_TOKEN}
