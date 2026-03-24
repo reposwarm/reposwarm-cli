@@ -35,73 +35,28 @@ func newWorkersListCmd() *cobra.Command {
 				return err
 			}
 
-			var resp api.WorkersResponse
-			if err := client.Get(ctx(), "/workers", &resp); err != nil {
-				return fmt.Errorf("failed to list workers: %w", err)
-			}
+			workers := gatherWorkerInfo(client)
 
-			// For Docker installs, overlay real container status
-			cfg, _ := config.Load()
-			if cfg != nil {
-				installDir := cfg.EffectiveInstallDir()
-				if (cfg.IsDockerInstall() || bootstrap.IsDockerInstall(installDir)) {
-					dockerServices, _ := bootstrap.DockerComposeServices(installDir)
-					for i, w := range resp.Workers {
-						for _, ds := range dockerServices {
-							if ds.Service == "worker" {
-								if ds.State == "running" {
-									resp.Workers[i].Status = "healthy"
-									if ds.Health == "healthy" {
-										resp.Workers[i].Status = "healthy"
-									} else if ds.Health == "unhealthy" {
-										resp.Workers[i].Status = "degraded"
-									}
-								}
-								resp.Workers[i].Host = ds.Name
-								_ = w // suppress unused
-								break
-							}
-						}
-					}
-					// Also fix env errors using worker.env file
-					workerEnv, _ := bootstrap.ReadWorkerEnvFile(installDir)
-					if workerEnv != nil {
-						for i := range resp.Workers {
-							var remaining []string
-							for _, e := range resp.Workers[i].EnvErrors {
-								// Check if the "missing" env var is actually in worker.env
-								found := false
-								for k := range workerEnv {
-									if strings.Contains(e, k) {
-										found = true
-										break
-									}
-								}
-								if !found {
-									remaining = append(remaining, e)
-								}
-							}
-							resp.Workers[i].EnvErrors = remaining
-						}
-					}
-					// Recount healthy
-					resp.Healthy = 0
-					for _, w := range resp.Workers {
-						if w.Status == "healthy" {
-							resp.Healthy++
-						}
-					}
+			// Recount healthy after Docker overlay
+			healthy := 0
+			for _, w := range workers {
+				if w.Status == "healthy" {
+					healthy++
 				}
 			}
 
 			if flagJSON {
-				return output.JSON(resp)
+				return output.JSON(map[string]any{
+					"workers": workers,
+					"total":   len(workers),
+					"healthy": healthy,
+				})
 			}
 
 			F := output.F
-			F.Section(fmt.Sprintf("Workers (%d configured, %d healthy)", resp.Total, resp.Healthy))
+			F.Section(fmt.Sprintf("Workers (%d configured, %d healthy)", len(workers), healthy))
 
-			if len(resp.Workers) == 0 {
+			if len(workers) == 0 {
 				F.Warning("No workers detected")
 				F.Info("Workers register with Temporal when they start.")
 				F.Info("Check: reposwarm logs worker")
@@ -113,7 +68,7 @@ func newWorkersListCmd() *cobra.Command {
 				headers = append(headers, "PID", "Host")
 			}
 			var rows [][]string
-			for _, w := range resp.Workers {
+			for _, w := range workers {
 				statusStr := formatWorkerStatus(w.Status)
 				envStr := output.Green("OK")
 
@@ -317,13 +272,74 @@ func newWorkersShowCmd() *cobra.Command {
 	return cmd
 }
 
-// gatherWorkerInfo fetches worker info from the API.
+// gatherWorkerInfo fetches worker info from the API and applies the Docker
+// overlay when running on a Docker install, so all callers (wf status -v,
+// doctor, errors, preflight, services) get the correct container status.
 func gatherWorkerInfo(client *api.Client) []api.WorkerInfo {
 	var resp api.WorkersResponse
 	if err := client.Get(ctx(), "/workers", &resp); err != nil {
 		return nil
 	}
+
+	cfg, _ := config.Load()
+	if cfg != nil {
+		installDir := cfg.EffectiveInstallDir()
+		if cfg.IsDockerInstall() || bootstrap.IsDockerInstall(installDir) {
+			dockerServices, _ := bootstrap.DockerComposeServices(installDir)
+			workerEnv, _ := bootstrap.ReadWorkerEnvFile(installDir)
+			resp.Workers = applyDockerOverlay(resp.Workers, dockerServices, workerEnv)
+		}
+	}
+
 	return resp.Workers
+}
+
+// applyDockerOverlay overrides worker status and host fields based on actual
+// Docker Compose service state. When workerEnv is non-nil, env errors for
+// variables present in the file are removed and EnvStatus is set to "OK" if
+// no errors remain.
+//
+// This is extracted as a pure function so it can be tested without Docker or
+// a real config file on disk.
+func applyDockerOverlay(workers []api.WorkerInfo, dockerServices []bootstrap.DockerService, workerEnv map[string]string) []api.WorkerInfo {
+	for i := range workers {
+		for _, ds := range dockerServices {
+			if ds.Service == "worker" {
+				if ds.State == "running" {
+					workers[i].Status = "healthy"
+					if ds.Health == "unhealthy" {
+						workers[i].Status = "degraded"
+					}
+				}
+				workers[i].Host = ds.Name
+				break
+			}
+		}
+	}
+
+	if workerEnv != nil {
+		for i := range workers {
+			var remaining []string
+			for _, e := range workers[i].EnvErrors {
+				found := false
+				for k := range workerEnv {
+					if strings.Contains(e, k) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					remaining = append(remaining, e)
+				}
+			}
+			workers[i].EnvErrors = remaining
+			if len(workers[i].EnvErrors) == 0 {
+				workers[i].EnvStatus = "OK"
+			}
+		}
+	}
+
+	return workers
 }
 
 func formatWorkerStatus(status string) string {
