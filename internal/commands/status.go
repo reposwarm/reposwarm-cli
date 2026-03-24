@@ -37,7 +37,7 @@ func newStatusCmd() *cobra.Command {
 			cfg, _ := config.Load()
 
 			if flagJSON {
-				return output.JSON(map[string]any{
+				result := map[string]any{
 					"connected": true,
 					"status":    health.Status,
 					"version":   health.Version,
@@ -46,7 +46,12 @@ func newStatusCmd() *cobra.Command {
 					"dynamodb":  health.DynamoDB.Connected,
 					"worker":    health.Worker.Connected,
 					"apiUrl":    cfg.APIUrl,
-				})
+				}
+				if cfg.IsDockerInstall() {
+					result["uiUrl"] = fmt.Sprintf("http://localhost:%s", cfg.EffectiveUIPort())
+					result["temporalUiUrl"] = fmt.Sprintf("http://localhost:%s", cfg.EffectiveTemporalUIPort())
+				}
+				return output.JSON(result)
 			}
 
 			F := output.F
@@ -75,6 +80,16 @@ func newStatusCmd() *cobra.Command {
 			if health.Worker.Connected {
 				F.KeyValue("  workers", fmt.Sprint(health.Worker.Count))
 			}
+
+			// Show service URLs for Docker installs
+			if cfg.IsDockerInstall() {
+				F.Println()
+				F.Section("Service URLs")
+				F.KeyValue("Dashboard (UI)", fmt.Sprintf("http://localhost:%s", cfg.EffectiveUIPort()))
+				F.KeyValue("API Server", fmt.Sprintf("http://localhost:%s", cfg.EffectiveAPIPort()))
+				F.KeyValue("Temporal UI", fmt.Sprintf("http://localhost:%s", cfg.EffectiveTemporalUIPort()))
+			}
+
 			F.Println()
 			return nil
 		},
