@@ -926,10 +926,31 @@ func checkProviderCredentials(priorChecks []checkResult) []checkResult {
 	}
 
 	currentEnv := make(map[string]string)
-	if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
-		for _, e := range envResp.Entries {
-			if e.Set {
-				currentEnv[e.Key] = e.Value
+
+	cfg2, cfgErr2 := config.Load()
+	isDockerEnvCreds := cfgErr2 == nil && (cfg2.IsDockerInstall() || bootstrap.IsDockerInstall(cfg2.EffectiveInstallDir()))
+
+	if isDockerEnvCreds {
+		// Docker installs: read from local worker.env + container env (same as checkWorkerEnv)
+		workerEnv, _ := bootstrap.ReadWorkerEnvFile(cfg2.EffectiveInstallDir())
+		containerEnv, _ := bootstrap.DockerServiceEnv(cfg2.EffectiveInstallDir(), "worker")
+		for k, v := range workerEnv {
+			if v != "" {
+				currentEnv[k] = v
+			}
+		}
+		for k, v := range containerEnv {
+			if v != "" {
+				currentEnv[k] = v
+			}
+		}
+	} else {
+		// Source installs: fetch from API
+		if err := client.Get(ctx(), "/workers/worker-1/env?reveal=true", &envResp); err == nil {
+			for _, e := range envResp.Entries {
+				if e.Set {
+					currentEnv[e.Key] = e.Value
+				}
 			}
 		}
 	}
