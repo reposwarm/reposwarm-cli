@@ -30,11 +30,30 @@ func newWorkflowsCmd() *cobra.Command {
 
 func newWorkflowsListCmd() *cobra.Command {
 	var limit int
+	var statusFilter string
+
+	validStatuses := []string{"running", "completed", "failed", "terminated", "timedout", "canceled"}
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List recent workflows",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validate --status if provided
+			if statusFilter != "" {
+				lower := strings.ToLower(statusFilter)
+				valid := false
+				for _, s := range validStatuses {
+					if lower == s {
+						valid = true
+						break
+					}
+				}
+				if !valid {
+					return fmt.Errorf("invalid --status value %q; valid values: %s", statusFilter, strings.Join(validStatuses, ", "))
+				}
+				statusFilter = lower
+			}
+
 			client, err := getClient()
 			if err != nil {
 				return err
@@ -46,15 +65,31 @@ func newWorkflowsListCmd() *cobra.Command {
 				return err
 			}
 
+			// Filter by status client-side
+			executions := result.Executions
+			if statusFilter != "" {
+				filtered := executions[:0]
+				for _, w := range executions {
+					if strings.ToLower(w.Status) == statusFilter {
+						filtered = append(filtered, w)
+					}
+				}
+				executions = filtered
+			}
+
 			if flagJSON {
-				return output.JSON(result.Executions)
+				return output.JSON(executions)
 			}
 
 			F := output.F
-			F.Section(fmt.Sprintf("Workflows (%d workflows)", len(result.Executions)))
+			title := fmt.Sprintf("Workflows (%d workflows)", len(executions))
+			if statusFilter != "" {
+				title = fmt.Sprintf("Workflows — status: %s (%d workflows)", statusFilter, len(executions))
+			}
+			F.Section(title)
 			headers := []string{"Workflow ID", "Status", "Type", "Started"}
 			var rows [][]string
-			for _, w := range result.Executions {
+			for _, w := range executions {
 				wfID := w.WorkflowID
 				if len(wfID) > 50 {
 					wfID = wfID[:47] + "..."
@@ -73,6 +108,7 @@ func newWorkflowsListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 25, "Max workflows to show")
+	cmd.Flags().StringVar(&statusFilter, "status", "", fmt.Sprintf("Filter by status (%s)", strings.Join(validStatuses, ", ")))
 	return cmd
 }
 

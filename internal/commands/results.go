@@ -112,6 +112,7 @@ func newResultsSectionsCmd() *cobra.Command {
 
 func newResultsReadCmd() *cobra.Command {
 	var raw bool
+	var all bool
 
 	cmd := &cobra.Command{
 		Use:   "read <repo> [section]",
@@ -119,10 +120,11 @@ func newResultsReadCmd() *cobra.Command {
 		Long: `Read investigation results for a repository.
 
 With section name: returns just that section.
-Without section name: returns ALL sections concatenated.
+Without section name (or with --all): returns ALL sections concatenated.
 
 Examples:
   reposwarm results read is-odd                  # All sections
+  reposwarm results read is-odd --all            # All sections (explicit)
   reposwarm results read is-odd hl_overview      # Single section
   reposwarm results read is-odd --raw > out.md   # Raw markdown`,
 		Args: friendlyRangeArgs(1, 2, "reposwarm results read <repo> [section]\n\nExamples:\n  reposwarm results read my-repo\n  reposwarm results read my-repo hl_overview"),
@@ -134,7 +136,9 @@ Examples:
 
 			repo := args[0]
 
-			if len(args) == 2 {
+			// --all explicitly requests all sections (same as omitting the section arg).
+			// If --all is passed alongside a section argument, --all wins.
+			if len(args) == 2 && !all {
 				section := args[1]
 				var content api.WikiContent
 				if err := client.Get(ctx(), "/wiki/"+repo+"/"+section, &content); err != nil {
@@ -201,6 +205,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&raw, "raw", false, "Output raw markdown (no formatting)")
+	cmd.Flags().BoolVar(&all, "all", false, "Read all sections (default when no section is given)")
 	return cmd
 }
 
