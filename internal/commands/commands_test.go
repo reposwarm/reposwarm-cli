@@ -761,3 +761,83 @@ func TestNewCmdJSON(t *testing.T) {
 		t.Error("expected os in environment")
 	}
 }
+
+// --- Top-level `discover` alias (added v1.3.178) ---
+// `reposwarm discover` is a top-level alias for `repos discover`.
+// These tests verify it's registered and behaves identically to `repos discover`.
+
+func TestTopLevelDiscoverExists(t *testing.T) {
+	root := NewRootCmd("test")
+	for _, c := range root.Commands() {
+		if c.Name() == "discover" {
+			return // found
+		}
+	}
+	t.Error("top-level `discover` command not registered on root")
+}
+
+func TestTopLevelDiscoverRuns(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"POST /repos/discover": map[string]any{
+			"success": true, "discovered": 7, "added": 2, "skipped": 5, "total": 7,
+		},
+	})
+	defer cleanup()
+
+	out, err := runCmd(t, "discover", "--json")
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	if result["discovered"] != float64(7) {
+		t.Errorf("discovered = %v, want 7", result["discovered"])
+	}
+}
+
+func TestTopLevelDiscoverWithSource(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"POST /repos/discover": map[string]any{
+			"success": true, "discovered": 3, "added": 3, "skipped": 0, "total": 3,
+		},
+	})
+	defer cleanup()
+
+	out, err := runCmd(t, "discover", "--source", "github", "--json")
+	if err != nil {
+		t.Fatalf("discover --source github: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	if result["discovered"] != float64(3) {
+		t.Errorf("discovered = %v, want 3", result["discovered"])
+	}
+}
+
+func TestTopLevelDiscoverWithOrg(t *testing.T) {
+	_, cleanup := testServer(t, map[string]any{
+		"POST /repos/discover": map[string]any{
+			"success": true, "discovered": 5, "added": 5, "skipped": 0, "total": 5,
+		},
+	})
+	defer cleanup()
+
+	out, err := runCmd(t, "discover", "--source", "github", "--org", "myorg", "--json")
+	if err != nil {
+		t.Fatalf("discover --source github --org myorg: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	if result["discovered"] != float64(5) {
+		t.Errorf("discovered = %v, want 5", result["discovered"])
+	}
+}
