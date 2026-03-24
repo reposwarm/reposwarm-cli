@@ -136,7 +136,9 @@ func showDockerServices(installDir string) error {
 	}
 	F.Section(fmt.Sprintf("Services (%d/%d running) — Docker Compose", running, len(services)))
 
-	headers := []string{"Service", "Container", "Status", "Health", "Ports"}
+	cfg, _ := config.Load()
+
+	headers := []string{"Service", "Container", "Status", "Health", "URL"}
 	var rows [][]string
 	for _, s := range services {
 		stateStr := s.State
@@ -156,11 +158,21 @@ func showDockerServices(installDir string) error {
 		} else if health == "unhealthy" {
 			health = output.Red("unhealthy")
 		}
-		ports := s.Ports
-		if ports == "" {
-			ports = "—"
+
+		// Build URL from service name and config ports
+		url := "—"
+		if s.State == "running" && cfg != nil {
+			switch s.Service {
+			case "ui":
+				url = fmt.Sprintf("http://localhost:%s", cfg.EffectiveUIPort())
+			case "api":
+				url = fmt.Sprintf("http://localhost:%s", cfg.EffectiveAPIPort())
+			case "temporal-ui":
+				url = fmt.Sprintf("http://localhost:%s", cfg.EffectiveTemporalUIPort())
+			}
 		}
-		rows = append(rows, []string{s.Service, s.Name, stateStr, health, ports})
+
+		rows = append(rows, []string{s.Service, s.Name, stateStr, health, url})
 	}
 
 	output.Table(headers, rows)
