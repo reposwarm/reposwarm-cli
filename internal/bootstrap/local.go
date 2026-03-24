@@ -730,6 +730,8 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-fakeSecretKey}
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - DYNAMODB_CACHE_TABLE=${DYNAMODB_TABLE:-reposwarm-cache}
+      - API_BEARER_TOKEN=${API_BEARER_TOKEN}
+      - REPOSWARM_API_URL=http://api:3000
     depends_on:
       api:
         condition: service_healthy

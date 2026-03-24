@@ -82,6 +82,11 @@ Get started:
 	// Repos (includes discover as subcommand)
 	root.AddCommand(newReposCmd())
 
+	// Top-level discover alias (convenience shortcut for 'repos discover')
+	discoverAlias := newDiscoverCmd()
+	discoverAlias.Short = "Auto-discover repositories (alias for 'repos discover')"
+	root.AddCommand(discoverAlias)
+
 	// Workflows (includes watch as subcommand)
 	root.AddCommand(newWorkflowsCmd())
 	root.AddCommand(newDashboardCmd())
